@@ -161,3 +161,25 @@ npm run dev
 - 新增 Agent：在 `backend/app/agents/` 新建文件继承 `BaseAgent`，然后在 `agents/registry.py` 注册。
 - 新增 Tool：在 `backend/app/tools/` 新建文件继承 `BaseTool`，然后在 `tools/registry.py` 注册。
 - 替换真实领星 API：修改 `backend/app/tools/lingxing_tool.py` 的 `execute()`。
+
+## 物流销量写入备货表工作流
+
+物流部门页面右侧工具栏提供“健腹轮销量写入备货表”工作流。执行时会：
+
+1. 通过领星 Streamable HTTP MCP 查询 SKU `70017-3`；
+2. 分别统计包含当天在内的近 3、7、15、30 天销量；
+3. 校验 `Sheet1!A156` 为 `70017-3`、`C156` 为 `健腹轮（黑色）`；
+4. 将销量依次写入 `Sheet1!AJ156:AM156`；
+5. 写入前创建 `备货逻辑看板表.workflow-backup.xlsx` 备份。
+
+需要在根目录 `.env` 配置以下本地变量（`.env` 不会提交到 Git）：
+
+```dotenv
+LINGXING_MCP_URL=https://openmcp.lingxing.com/mcp-servers/lingxing-mcp
+LINGXING_MCP_KEY=<领星 MCP Key>
+STOCK_WORKBOOK_PATH=\\192.168.12.158\e\备货逻辑看板表.xlsx
+SMB_USERNAME=<网络共享用户名>
+SMB_PASSWORD=<网络共享密码>
+```
+
+领星账号需要拥有“亚马逊 → 统计 → 产品表现 → 查看”权限。Docker 无法继承 Windows 当前用户的 SMB 登录会话，因此容器部署时必须显式配置 `SMB_USERNAME` 和 `SMB_PASSWORD`；Windows 原生运行后端且 UNC 已登录时可不配置这两项。

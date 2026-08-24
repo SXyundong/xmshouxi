@@ -8,6 +8,11 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - MODEL=${MODEL:-gpt-4o-mini}
+      - LINGXING_MCP_URL=${LINGXING_MCP_URL:-https://openmcp.lingxing.com/mcp-servers/lingxing-mcp}
+      - LINGXING_MCP_KEY=${LINGXING_MCP_KEY:-}
+      - STOCK_WORKBOOK_PATH=${STOCK_WORKBOOK_PATH:-}
+      - SMB_USERNAME=${SMB_USERNAME:-}
+      - SMB_PASSWORD=${SMB_PASSWORD:-}
     restart: unless-stopped
 
   frontend:

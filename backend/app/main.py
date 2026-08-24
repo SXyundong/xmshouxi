@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.agents.registry import agent_registry
 from app.api.chat import router as chat_router
+from app.api.workflows import router as workflow_router
 
 app = FastAPI(title="电商多部门 Agent 系统", version="1.0.0")
 
@@ -16,6 +17,7 @@ app.add_middleware(
 )
 
 app.include_router(chat_router)
+app.include_router(workflow_router)
 
 
 @app.get("/")
