@@ -11,19 +11,41 @@ class ChatResponse(BaseModel):
     answer: str
 
 
-class LogisticsSalesValues(BaseModel):
-    days_3: int
-    days_7: int
-    days_15: int
-    days_30: int
+class LogisticsWorkflowWarning(BaseModel):
+    level: str
+    code: str
+    message: str
+    rows: list[int]
+    identity: dict[str, str] | None = None
 
 
-class LogisticsSalesWorkflowResponse(BaseModel):
+class LogisticsSalesPreviewResponse(BaseModel):
     status: str
-    sku: str
-    product_name: str
-    sales: LogisticsSalesValues
+    preview_id: str
     workbook: str
     sheet: str
-    range: str
+    target_columns: str
+    total_rows: int
+    unique_products: int
+    matched_rows: int
+    missing_rows: int
+    duplicate_groups: int
+    warnings: list[LogisticsWorkflowWarning]
+    can_execute: bool
+    expires_at: str
+
+
+class LogisticsSalesExecuteRequest(BaseModel):
+    preview_id: str
+
+
+class LogisticsSalesExecuteResponse(BaseModel):
+    status: str
+    workbook: str
+    sheet: str
+    target_columns: str
+    updated_rows: int
+    skipped_rows: int
+    duplicate_groups: int
+    warnings: list[LogisticsWorkflowWarning]
     updated_at: str

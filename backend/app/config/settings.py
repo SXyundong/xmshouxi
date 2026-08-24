@@ -16,7 +16,9 @@ LINGXING_MCP_URL = os.getenv(
 LINGXING_MCP_KEY = os.getenv("LINGXING_MCP_KEY", "")
 STOCK_WORKBOOK_PATH = os.getenv(
     "STOCK_WORKBOOK_PATH",
-    r"\\192.168.12.158\e\备货逻辑看板表.xlsx",
+    r"C:\Users\Administrator\Desktop\物流工作流测试\备货逻辑看板表-工作流测试.xlsx",
 )
-SMB_USERNAME = os.getenv("SMB_USERNAME", "")
-SMB_PASSWORD = os.getenv("SMB_PASSWORD", "")
+NETWORK_WORKBOOK_WRITE_ENABLED = os.getenv(
+    "NETWORK_WORKBOOK_WRITE_ENABLED",
+    "false",
+).lower() in {"1", "true", "yes", "on"}

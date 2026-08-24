@@ -3,19 +3,46 @@ export interface ChatResponse {
   answer: string;
 }
 
-export interface LogisticsWorkflowResponse {
-  status: 'success';
-  sku: string;
-  product_name: string;
-  sales: {
-    days_3: number;
-    days_7: number;
-    days_15: number;
-    days_30: number;
+export interface LogisticsWorkflowWarning {
+  level: 'warning';
+  code: string;
+  message: string;
+  rows: number[];
+  identity?: {
+    sku: string;
+    amazon_sku: string;
+    product_name: string;
+    category: string;
+    store: string;
+    country: string;
   };
+}
+
+export interface LogisticsWorkflowPreview {
+  status: 'preview';
+  preview_id: string;
   workbook: string;
   sheet: string;
-  range: string;
+  target_columns: string;
+  total_rows: number;
+  unique_products: number;
+  matched_rows: number;
+  missing_rows: number;
+  duplicate_groups: number;
+  warnings: LogisticsWorkflowWarning[];
+  can_execute: boolean;
+  expires_at: string;
+}
+
+export interface LogisticsWorkflowResult {
+  status: 'success';
+  workbook: string;
+  sheet: string;
+  target_columns: string;
+  updated_rows: number;
+  skipped_rows: number;
+  duplicate_groups: number;
+  warnings: LogisticsWorkflowWarning[];
   updated_at: string;
 }
 
@@ -36,14 +63,29 @@ export async function sendChat(
   return res.json();
 }
 
-export async function runLogisticsSalesWorkflow(): Promise<LogisticsWorkflowResponse> {
-  const res = await fetch('/api/workflows/logistics/sales-to-stock-sheet', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-  });
+async function parseWorkflowResponse<T>(res: Response): Promise<T> {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(body.detail || `工作流执行失败：${res.status}`);
   }
   return body;
+}
+
+export async function previewLogisticsSalesWorkflow(): Promise<LogisticsWorkflowPreview> {
+  const res = await fetch('/api/workflows/logistics/sales-to-stock-sheet/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  return parseWorkflowResponse<LogisticsWorkflowPreview>(res);
+}
+
+export async function executeLogisticsSalesWorkflow(
+  previewId: string,
+): Promise<LogisticsWorkflowResult> {
+  const res = await fetch('/api/workflows/logistics/sales-to-stock-sheet/execute', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ preview_id: previewId }),
+  });
+  return parseWorkflowResponse<LogisticsWorkflowResult>(res);
 }
