@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; --background: #090a0d; --panel: rgba(20,22,28,.72); --panel-strong: rgba(24,27,34,.92); --line: rgba(255,255,255,.09); }
+* { box-sizing: border-box; }
+html { background: var(--background); }
+body { min-height: 100vh; margin: 0; background: radial-gradient(circle at 10% 0%,rgba(49,139,120,.15),transparent 29rem),radial-gradient(circle at 92% 10%,rgba(96,72,153,.12),transparent 30rem),var(--background); color: #f3f4f6; font-family: Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; -webkit-font-smoothing: antialiased; }
+body::before { position: fixed; inset: 0; z-index: -1; content: ""; pointer-events: none; opacity: .22; background-image: linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px); background-size: 52px 52px; mask-image: linear-gradient(to bottom,black,transparent 80%); }
+::selection { background: rgba(110,231,183,.25); }
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: rgba(255,255,255,.14); background-clip: padding-box; }
+.glass { border: 1px solid var(--line); background: var(--panel); box-shadow: 0 24px 80px rgba(0,0,0,.28); backdrop-filter: blur(24px) saturate(125%); -webkit-backdrop-filter: blur(24px) saturate(125%); }
+.glass-strong { border: 1px solid var(--line); background: var(--panel-strong); backdrop-filter: blur(28px) saturate(130%); -webkit-backdrop-filter: blur(28px) saturate(130%); }
+.text-balance { text-wrap: balance; }
+@keyframes fade-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.animate-fade-up { animation: fade-up .5s ease-out both; }
