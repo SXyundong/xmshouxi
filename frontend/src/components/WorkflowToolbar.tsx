@@ -3,10 +3,12 @@
 import { useState } from 'react';
 import {
   executeLogisticsSalesWorkflow,
+  getLogisticsSalesPreviewStatus,
+  LogisticsWorkflowJob,
   LogisticsWorkflowPreview,
   LogisticsWorkflowResult,
   LogisticsWorkflowWarning,
-  previewLogisticsSalesWorkflow,
+  startLogisticsSalesPreview,
 } from '@/services/api';
 
 interface Props {
@@ -42,6 +44,7 @@ function WarningList({ warnings }: { warnings: LogisticsWorkflowWarning[] }) {
 export default function WorkflowToolbar({ department, compact = false }: Props) {
   const [phase, setPhase] = useState<'idle' | 'previewing' | 'executing'>('idle');
   const [preview, setPreview] = useState<LogisticsWorkflowPreview | null>(null);
+  const [job, setJob] = useState<LogisticsWorkflowJob | null>(null);
   const [result, setResult] = useState<LogisticsWorkflowResult | null>(null);
   const [error, setError] = useState('');
 
@@ -54,7 +57,17 @@ export default function WorkflowToolbar({ department, compact = false }: Props) 
     setResult(null);
     setError('');
     try {
-      setPreview(await previewLogisticsSalesWorkflow());
+      const started = await startLogisticsSalesPreview();
+      setJob(started);
+      let current = started;
+      while (current.status !== 'complete' && current.status !== 'failed') {
+        await new Promise((resolve) => setTimeout(resolve, 1800));
+        current = await getLogisticsSalesPreviewStatus(started.job_id);
+        setJob(current);
+      }
+      if (current.status === 'failed') throw new Error(current.error || '物流销量预览失败');
+      if (!current.preview) throw new Error('预览任务已完成，但没有返回预览数据');
+      setPreview(current.preview);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '预览生成失败');
     } finally {
@@ -148,6 +161,13 @@ export default function WorkflowToolbar({ department, compact = false }: Props) 
           </div>
         ) : (
           <div className="mt-12 text-center"><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.07] bg-white/[0.025] text-white/20">＋</div><p className="mt-3 text-[11px] text-white/30">暂无已配置工具</p></div>
+        )}
+
+        {job && job.status !== 'complete' && job.status !== 'failed' && (
+          <div className="mt-3 rounded-xl border border-cyan-200/15 bg-cyan-300/[0.045] p-3">
+            <div className="flex items-center justify-between text-[10px] text-cyan-100/80"><span>{job.message}</span><span className="tabular-nums">{job.progress}%</span></div>
+            <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/[0.08]"><div className="h-full rounded-full bg-cyan-200/70 transition-all" style={{ width: `${job.progress}%` }} /></div>
+          </div>
         )}
 
         {preview && (

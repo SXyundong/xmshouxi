@@ -14,6 +14,8 @@ from app.workflows.logistics_sales_workflow import (
     ProductKey,
     WorkflowPlan,
 )
+from app.workflows.cached_logistics_sales_workflow import CachedLogisticsSalesWorkflow
+from app.workflows.sales_cache import DailySalesRecord, SalesCache
 
 
 class LogisticsSalesWorkflowTests(unittest.TestCase):
@@ -198,6 +200,82 @@ class LogisticsSalesWorkflowTests(unittest.TestCase):
         warning = self.workflow._platform_scope_warning()
         self.assertEqual(warning["code"], "platform_scope_limited")
         self.assertIn("真正全平台", warning["message"])
+
+
+class SalesCacheTests(unittest.TestCase):
+    def test_coverage_tracks_missing_dates_and_daily_rows(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache = SalesCache(Path(temp_dir) / "sales.sqlite3")
+            start = datetime(2026, 8, 20).date()
+            end = datetime(2026, 8, 22).date()
+            self.assertEqual(
+                cache.missing_dates(["SKU-1"], start, end)["SKU-1"],
+                [start, start + timedelta(days=1), end],
+            )
+            cache.save_daily_records(
+                [
+                    DailySalesRecord(
+                        sales_date="2026-08-20",
+                        sku="SKU-1",
+                        amazon_sku="",
+                        product_name="商品",
+                        category="品类",
+                        store="店铺",
+                        country="美国",
+                        platform="其他",
+                        volume=7,
+                        trace_id="trace-1",
+                    )
+                ],
+                ["SKU-1"],
+                start,
+                end,
+                "trace-1",
+            )
+            self.assertEqual(cache.missing_dates(["SKU-1"], start, end), {})
+            self.assertEqual(
+                cache.daily_records("SKU-1", start, end)[0].volume,
+                7,
+            )
+
+    def test_cached_matching_allows_empty_amazon_sku(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workflow = CachedLogisticsSalesWorkflow()
+            workflow.cache = SalesCache(Path(temp_dir) / "sales.sqlite3")
+            key = ProductKey(
+                sku="SKU-1",
+                amazon_sku="",
+                product_name="商品",
+                category="品类",
+                store="店铺",
+                country="美国",
+            )
+            workflow.cache.save_daily_records(
+                [
+                    DailySalesRecord(
+                        sales_date="2026-08-24",
+                        sku="SKU-1",
+                        amazon_sku="",
+                        product_name="商品",
+                        category="品类",
+                        store="店铺",
+                        country="美国",
+                        platform="其他",
+                        volume=9,
+                        trace_id="trace-2",
+                    )
+                ],
+                ["SKU-1"],
+                datetime(2026, 8, 24).date(),
+                datetime(2026, 8, 24).date(),
+                "trace-2",
+            )
+            updates, _, warnings, missing = workflow._build_cached_updates(
+                {key: [2]}, datetime(2026, 8, 25).date()
+            )
+            self.assertEqual(missing, 0)
+            self.assertEqual(updates[2], (9, 9, 9, 9))
+            self.assertFalse(warnings)
 
 
 if __name__ == "__main__":

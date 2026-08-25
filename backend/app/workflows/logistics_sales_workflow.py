@@ -54,7 +54,6 @@ class ProductKey:
         return all(
             (
                 self.sku,
-                self.amazon_sku,
                 self.product_name,
                 self.category,
                 self.store,

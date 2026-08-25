@@ -49,3 +49,12 @@ class LogisticsSalesExecuteResponse(BaseModel):
     duplicate_groups: int
     warnings: list[LogisticsWorkflowWarning]
     updated_at: str
+
+
+class LogisticsSalesJobResponse(BaseModel):
+    status: str
+    job_id: str
+    progress: int
+    message: str
+    error: str = ""
+    preview: LogisticsSalesPreviewResponse | None = None

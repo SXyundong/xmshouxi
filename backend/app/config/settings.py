@@ -18,6 +18,12 @@ STOCK_WORKBOOK_PATH = os.getenv(
     "STOCK_WORKBOOK_PATH",
     r"C:\Users\Administrator\Desktop\物流工作流测试\备货逻辑看板表-工作流测试.xlsx",
 )
+LOGISTICS_SALES_DB_PATH = os.getenv(
+    "LOGISTICS_SALES_DB_PATH",
+    r"C:\Users\Administrator\Desktop\物流工作流测试\logistics_sales.sqlite3",
+)
+LOGISTICS_INITIAL_SYNC_DAYS = int(os.getenv("LOGISTICS_INITIAL_SYNC_DAYS", "60"))
+LOGISTICS_LOOKBACK_DAYS = int(os.getenv("LOGISTICS_LOOKBACK_DAYS", "30"))
 NETWORK_WORKBOOK_WRITE_ENABLED = os.getenv(
     "NETWORK_WORKBOOK_WRITE_ENABLED",
     "false",
