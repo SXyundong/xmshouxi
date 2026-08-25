@@ -16,7 +16,7 @@ LINGXING_MCP_URL = os.getenv(
 LINGXING_MCP_KEY = os.getenv("LINGXING_MCP_KEY", "")
 STOCK_WORKBOOK_PATH = os.getenv(
     "STOCK_WORKBOOK_PATH",
-    r"C:\Users\Administrator\Desktop\物流工作流测试\备货逻辑看板表-工作流测试.xlsx",
+    r"C:\Users\Administrator\Desktop\物流工作流测试1\备货逻辑看板表.xlsx",
 )
 LOGISTICS_SALES_DB_PATH = os.getenv(
     "LOGISTICS_SALES_DB_PATH",

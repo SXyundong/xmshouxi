@@ -491,6 +491,9 @@ class LogisticsSalesWorkflow:
             with zipfile.ZipFile(source, "r") as source_archive:
                 sheet_path = self._sheet_xml_path(source_archive, self.SHEET_NAME)
                 sheet_xml = source_archive.read(sheet_path).decode("utf-8")
+                workbook_xml = self._mark_workbook_for_full_recalculation(
+                    source_archive.read("xl/workbook.xml").decode("utf-8")
+                )
                 for row_number, sales in sorted(updates.items()):
                     for column, value in zip(self.SALES_COLUMNS, sales):
                         sheet_xml = self._replace_numeric_cell(
@@ -505,11 +508,25 @@ class LogisticsSalesWorkflow:
                         content = source_archive.read(entry.filename)
                         if entry.filename == sheet_path:
                             content = sheet_xml.encode("utf-8")
+                        elif entry.filename == "xl/workbook.xml":
+                            content = workbook_xml.encode("utf-8")
                         destination_archive.writestr(entry, content)
         except LogisticsWorkflowError:
             raise
         except Exception as exc:
             raise LogisticsWorkflowError("无法安全更新本地测试表") from exc
+
+    @staticmethod
+    def _mark_workbook_for_full_recalculation(workbook_xml: str) -> str:
+        """Keep formulas intact and ask Excel/WPS to recalculate the workbook on open."""
+        calc_properties = '<calcPr calcId="0" calcMode="auto" fullCalcOnLoad="1" forceFullCalc="1"/>'
+        pattern = re.compile(r"<calcPr\b[^>]*/>|<calcPr\b[^>]*>.*?</calcPr>", re.DOTALL)
+        if pattern.search(workbook_xml):
+            return pattern.sub(calc_properties, workbook_xml, count=1)
+        closing_tag = "</workbook>"
+        if closing_tag not in workbook_xml:
+            raise LogisticsWorkflowError("工作簿结构不完整，无法设置自动重算")
+        return workbook_xml.replace(closing_tag, calc_properties + closing_tag, 1)
 
     @staticmethod
     def _sheet_xml_path(archive: zipfile.ZipFile, sheet_name: str) -> str:

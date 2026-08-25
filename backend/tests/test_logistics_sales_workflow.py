@@ -47,6 +47,7 @@ class LogisticsSalesWorkflowTests(unittest.TestCase):
         for row_number in (2, 5):
             for column, value in enumerate(self.key.as_dict().values(), start=1):
                 sheet.cell(row_number, column).value = value
+        sheet["AR2"] = "=IF(AJ2>0,AJ2,0)"
         missing = ProductKey(
             sku="NO-MATCH",
             amazon_sku="NO-MATCH-US",
@@ -178,7 +179,12 @@ class LogisticsSalesWorkflowTests(unittest.TestCase):
                 }
             self.assertEqual(original_parts.keys(), written_parts.keys())
             for part_name, content in original_parts.items():
-                if part_name != sheet_path:
+                if part_name == "xl/workbook.xml":
+                    self.assertNotEqual(content, written_parts[part_name])
+                    self.assertIn(b'calcMode="auto"', written_parts[part_name])
+                    self.assertIn(b'fullCalcOnLoad="1"', written_parts[part_name])
+                    self.assertIn(b'forceFullCalc="1"', written_parts[part_name])
+                elif part_name != sheet_path:
                     self.assertEqual(content, written_parts[part_name])
 
             result = load_workbook(target, data_only=False)
@@ -192,9 +198,18 @@ class LogisticsSalesWorkflowTests(unittest.TestCase):
                         ),
                         (10, 20, 30, 40),
                     )
+                self.assertEqual(sheet["AR2"].value, "=IF(AJ2>0,AJ2,0)")
                 self.assertEqual(sheet["AJ3"].value, 88)
             finally:
                 result.close()
+
+    def test_full_recalculation_marker_preserves_formula_text(self):
+        workbook_xml = '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><calcPr calcId="191029"/></workbook>'
+        marked = self.workflow._mark_workbook_for_full_recalculation(workbook_xml)
+        self.assertIn('calcMode="auto"', marked)
+        self.assertIn('fullCalcOnLoad="1"', marked)
+        self.assertIn('forceFullCalc="1"', marked)
+
 
     def test_platform_scope_warning_is_explicit(self):
         warning = self.workflow._platform_scope_warning()

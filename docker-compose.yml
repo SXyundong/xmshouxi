@@ -10,13 +10,14 @@ services:
       - MODEL=${MODEL:-gpt-4o-mini}
       - LINGXING_MCP_URL=${LINGXING_MCP_URL:-https://openmcp.lingxing.com/mcp-servers/lingxing-mcp}
       - LINGXING_MCP_KEY=${LINGXING_MCP_KEY:-}
-      - STOCK_WORKBOOK_PATH=/data/备货逻辑看板表-工作流测试.xlsx
+      - STOCK_WORKBOOK_PATH=${STOCK_WORKBOOK_PATH:-/workbook/备货逻辑看板表.xlsx}
       - LOGISTICS_SALES_DB_PATH=/data/logistics_sales.sqlite3
       - LOGISTICS_INITIAL_SYNC_DAYS=60
       - LOGISTICS_LOOKBACK_DAYS=30
       - NETWORK_WORKBOOK_WRITE_ENABLED=false
     volumes:
-      - "${HOST_STOCK_WORKBOOK_DIRECTORY:-C:/Users/Administrator/Desktop/物流工作流测试}:/data"
+      - "${HOST_STOCK_WORKBOOK_DIRECTORY:-C:/Users/Administrator/Desktop/物流工作流测试1}:/workbook"
+      - "${HOST_LOGISTICS_CACHE_DIRECTORY:-C:/Users/Administrator/Desktop/物流工作流测试}:/data"
     restart: unless-stopped
 
   frontend:
