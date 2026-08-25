@@ -10,6 +10,7 @@ export interface LogisticsWorkflowWarning {
   rows: number[];
   identity?: {
     sku: string;
+    lingxing_sku?: string;
     amazon_sku: string;
     product_name: string;
     category: string;
