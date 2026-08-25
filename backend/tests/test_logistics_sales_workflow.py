@@ -10,6 +10,7 @@ from openpyxl import Workbook, load_workbook
 from app.workflows.logistics_sales_workflow import (
     LogisticsSalesWorkflow,
     LogisticsWorkflowError,
+    McpError,
     ProductKey,
     WorkflowPlan,
 )
@@ -96,6 +97,15 @@ class LogisticsSalesWorkflowTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(LogisticsWorkflowError, "暂无产品表现查看权限"):
             self.workflow._extract_sales_map(payload)
+
+    def test_empty_lingxing_error_message_has_readable_fallback(self):
+        with self.assertRaisesRegex(LogisticsWorkflowError, "领星查询失败"):
+            self.workflow._extract_sales_map(
+                {"code": 0, "data": {"code": 8002, "msg": None}}
+            )
+
+    def test_empty_mcp_error_message_has_readable_fallback(self):
+        self.assertEqual(str(McpError(None)), "领星 MCP 调用失败")
 
     def test_duplicate_rows_receive_same_values_and_missing_row_is_untouched(self):
         with tempfile.TemporaryDirectory() as temp_dir:

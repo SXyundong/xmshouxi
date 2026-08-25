@@ -636,10 +636,10 @@ class LogisticsSalesWorkflow:
         if not isinstance(payload, dict):
             raise LogisticsWorkflowError("领星销售数据格式异常")
         if payload.get("code") not in (None, 0):
-            raise LogisticsWorkflowError(payload.get("message", "领星查询失败"))
+            raise LogisticsWorkflowError(payload.get("message") or "领星查询失败")
         data = payload.get("data")
         if isinstance(data, dict) and data.get("code") not in (None, 0):
-            raise LogisticsWorkflowError(data.get("msg", "领星查询失败"))
+            raise LogisticsWorkflowError(data.get("msg") or data.get("message") or "领星查询失败")
         return data
 
     @staticmethod

@@ -27,7 +27,9 @@ async def preview_logistics_sales_workflow():
         result = await logistics_sales_workflow.preview()
         return LogisticsSalesPreviewResponse(status="preview", **result)
     except (McpError, LogisticsWorkflowError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        detail = str(exc) or "物流销量预览失败，请检查领星 MCP 配置和权限"
+        logger.warning("Logistics sales workflow preview rejected: %s", detail)
+        raise HTTPException(status_code=422, detail=detail) from exc
     except Exception as exc:
         logger.exception("Logistics sales workflow preview failed")
         raise HTTPException(status_code=500, detail="物流销量预览生成失败") from exc
@@ -43,7 +45,9 @@ async def execute_logistics_sales_workflow(request: LogisticsSalesExecuteRequest
         result = await logistics_sales_workflow.execute(request.preview_id)
         return LogisticsSalesExecuteResponse(status="success", **result)
     except (McpError, LogisticsWorkflowError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        detail = str(exc) or "物流销量写入前校验失败"
+        logger.warning("Logistics sales workflow execution rejected: %s", detail)
+        raise HTTPException(status_code=422, detail=detail) from exc
     except PermissionError as exc:
         raise HTTPException(status_code=423, detail="本地测试表正在使用或没有写入权限") from exc
     except Exception as exc:

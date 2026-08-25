@@ -9,7 +9,10 @@ import httpx
 
 
 class McpError(RuntimeError):
-    pass
+    def __init__(self, message: Any = None):
+        # Some MCP error envelopes contain a null `message`. Never expose
+        # Python's stringified "None" to the UI.
+        super().__init__(message or "领星 MCP 调用失败")
 
 
 class StreamableHttpMcpClient:
@@ -86,7 +89,8 @@ class StreamableHttpMcpClient:
             payload = self._decode_response(response)
 
         if payload.get("error"):
-            raise McpError(payload["error"].get("message", "领星 MCP 调用失败"))
+            error = payload["error"]
+            raise McpError(error.get("message") or error.get("data") or "领星 MCP 调用失败")
         result = payload.get("result", {})
         if result.get("isError"):
             raise McpError("领星 MCP 工具执行失败")
