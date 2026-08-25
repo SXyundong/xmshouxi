@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import httpx
@@ -13,6 +14,9 @@ class McpError(RuntimeError):
         # Some MCP error envelopes contain a null `message`. Never expose
         # Python's stringified "None" to the UI.
         super().__init__(message or "领星 MCP 调用失败")
+
+
+logger = logging.getLogger(__name__)
 
 
 class StreamableHttpMcpClient:
@@ -90,16 +94,39 @@ class StreamableHttpMcpClient:
 
         if payload.get("error"):
             error = payload["error"]
+            logger.warning(
+                "LingXing MCP JSON-RPC error: code=%r message=%r data=%s",
+                error.get("code"),
+                error.get("message"),
+                repr(error.get("data"))[:500],
+            )
             raise McpError(error.get("message") or error.get("data") or "领星 MCP 调用失败")
         result = payload.get("result", {})
-        if result.get("isError"):
-            raise McpError("领星 MCP 工具执行失败")
+        tool_error = result.get("isError")
         for content in result.get("content", []):
             if content.get("type") != "text":
                 continue
             text = content.get("text", "")
             try:
-                return json.loads(text)
+                parsed = json.loads(text)
             except json.JSONDecodeError:
-                return text
+                parsed = text
+            if tool_error:
+                if isinstance(parsed, dict):
+                    detail = (
+                        parsed.get("message")
+                        or parsed.get("msg")
+                        or parsed.get("error")
+                    )
+                else:
+                    detail = parsed
+                logger.warning(
+                    "LingXing MCP tool error: detail=%s",
+                    repr(detail or text)[:500],
+                )
+                raise McpError(detail or "领星 MCP 工具执行失败")
+            return parsed
+        if tool_error:
+            logger.warning("LingXing MCP tool error: response had no text content")
+            raise McpError("领星 MCP 工具执行失败")
         raise McpError("领星 MCP 没有返回可解析的数据")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import hashlib
+import logging
 import os
 import posixpath
 import re
@@ -28,6 +29,9 @@ from app.core.mcp_client import McpError, StreamableHttpMcpClient
 
 class LogisticsWorkflowError(RuntimeError):
     pass
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -320,7 +324,10 @@ class LogisticsSalesWorkflow:
                         "date_type": "purchase",
                         "search_field": "local_sku",
                         "search_value": sku_batch,
-                        "turn_on_summary": 0,
+                        # LingXing requires summary mode for SKU-dimension queries.
+                        "summary_field": "sku",
+                        "summary_field_level1": "sku",
+                        "turn_on_summary": 1,
                         "date_view_order_type": 0,
                         "sort_field": "volume",
                         "sort_type": "desc",
@@ -636,10 +643,30 @@ class LogisticsSalesWorkflow:
         if not isinstance(payload, dict):
             raise LogisticsWorkflowError("领星销售数据格式异常")
         if payload.get("code") not in (None, 0):
+            logger.warning(
+                "LingXing sales payload error: code=%r message=%r data=%s",
+                payload.get("code"),
+                payload.get("message"),
+                repr(payload.get("data"))[:500],
+            )
             raise LogisticsWorkflowError(payload.get("message") or "领星查询失败")
         data = payload.get("data")
-        if isinstance(data, dict) and data.get("code") not in (None, 0):
+        if not isinstance(data, dict):
+            return data
+        # LingXing wraps the actual report in data.data and uses code=1 for
+        # a successful product-performance result.
+        nested_code = data.get("code")
+        if nested_code not in (None, 0, 1):
+            logger.warning(
+                "LingXing sales data error: code=%r message=%r msg=%r data=%s",
+                nested_code,
+                data.get("message"),
+                data.get("msg"),
+                repr(data)[:500],
+            )
             raise LogisticsWorkflowError(data.get("msg") or data.get("message") or "领星查询失败")
+        if "data" in data:
+            return data.get("data")
         return data
 
     @staticmethod

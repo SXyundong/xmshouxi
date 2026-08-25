@@ -107,6 +107,21 @@ class LogisticsSalesWorkflowTests(unittest.TestCase):
     def test_empty_mcp_error_message_has_readable_fallback(self):
         self.assertEqual(str(McpError(None)), "领星 MCP 调用失败")
 
+    def test_unwraps_lingxing_nested_code_one_success_payload(self):
+        payload = {
+            "code": 0,
+            "data": {
+                "code": 1,
+                "msg": None,
+                "trace_id": "trace-test",
+                "data": {"list": [{"local_sku": "60003-2", "volume": 6}]},
+            },
+        }
+        self.assertEqual(
+            self.workflow._validated_payload_data(payload),
+            {"list": [{"local_sku": "60003-2", "volume": 6}]},
+        )
+
     def test_duplicate_rows_receive_same_values_and_missing_row_is_untouched(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             target = Path(temp_dir) / "备货逻辑看板表-工作流测试.xlsx"
