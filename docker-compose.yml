@@ -16,7 +16,7 @@ services:
       - LOGISTICS_LOOKBACK_DAYS=30
       - NETWORK_WORKBOOK_WRITE_ENABLED=false
     volumes:
-      - "${HOST_STOCK_WORKBOOK_DIRECTORY:-C:/Users/Administrator/Desktop/物流工作流测试1}:/workbook"
+      - "${HOST_STOCK_WORKBOOK_DIRECTORY:-C:/Users/Administrator/Desktop/物流工作流测试2}:/workbook"
       - "${HOST_LOGISTICS_CACHE_DIRECTORY:-C:/Users/Administrator/Desktop/物流工作流测试}:/data"
     restart: unless-stopped
 
