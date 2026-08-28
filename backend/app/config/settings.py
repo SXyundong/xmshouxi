@@ -34,6 +34,13 @@ STOCK_WORKBOOK_PATH = os.getenv(
     "STOCK_WORKBOOK_PATH",
     r"C:\Users\Administrator\Desktop\物流工作流测试3\备货逻辑看板表.xlsx",
 )
+# Portable workbook template used by the download-only logistics export.  The
+# template is bundled with the backend image so Railway never needs access to a
+# user's desktop or a private network share.
+LOGISTICS_EXPORT_TEMPLATE_PATH = os.getenv(
+    "LOGISTICS_EXPORT_TEMPLATE_PATH",
+    "",
+).strip()
 # Deprecated: retained only for backward-compatible local tooling. The runtime
 # sales cache is now stored in PostgreSQL.
 LOGISTICS_SALES_DB_PATH = os.getenv(
