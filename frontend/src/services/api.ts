@@ -47,6 +47,20 @@ export interface LogisticsWorkflowResult {
   updated_at: string;
 }
 
+export interface LogisticsWorkflowExport {
+  status: 'success';
+  filename: string;
+  download_url: string;
+  sheet: string;
+  target_columns: string;
+  total_rows: number;
+  matched_rows: number;
+  missing_rows: number;
+  duplicate_groups: number;
+  warnings: LogisticsWorkflowWarning[];
+  expires_at: string;
+}
+
 export interface LogisticsWorkflowJob {
   status: 'queued' | 'running' | 'complete' | 'failed';
   job_id: string;
@@ -55,6 +69,7 @@ export interface LogisticsWorkflowJob {
   error: string;
   preview: LogisticsWorkflowPreview | null;
   result: LogisticsWorkflowResult | null;
+  export: LogisticsWorkflowExport | null;
 }
 
 export async function sendChat(
@@ -147,5 +162,33 @@ export async function waitForLogisticsSalesExecute(jobId: string): Promise<Logis
     if (job.status === 'complete' && job.result) return job.result;
     if (job.status === 'failed') throw new Error(job.error || '物流销量写入失败');
     await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
+export async function startLogisticsSalesExport(
+  forceRefresh = false,
+): Promise<LogisticsWorkflowJob> {
+  const res = await fetch('/api/workflows/logistics/sales-to-stock-sheet/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force_refresh: forceRefresh }),
+  });
+  return parseWorkflowResponse<LogisticsWorkflowJob>(res);
+}
+
+export async function getLogisticsSalesExportStatus(jobId: string): Promise<LogisticsWorkflowJob> {
+  const res = await fetch(`/api/workflows/logistics/sales-to-stock-sheet/export/${jobId}`, {
+    method: 'GET',
+    cache: 'no-store',
+  });
+  return parseWorkflowResponse<LogisticsWorkflowJob>(res);
+}
+
+export async function waitForLogisticsSalesExport(jobId: string): Promise<LogisticsWorkflowExport> {
+  for (;;) {
+    const job = await getLogisticsSalesExportStatus(jobId);
+    if (job.status === 'complete' && job.export) return job.export;
+    if (job.status === 'failed') throw new Error(job.error || '物流销量 Excel 导出失败');
+    await new Promise((resolve) => setTimeout(resolve, 1800));
   }
 }

@@ -1,6 +1,8 @@
 import logging
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 
 from app.core.mcp_client import McpError
 from app.models.schemas import (
@@ -82,3 +84,57 @@ async def logistics_sales_execute_status(job_id: str):
         return await cached_logistics_sales_workflow.job_status(job_id)
     except LogisticsWorkflowError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post(
+    "/logistics/sales-to-stock-sheet/export",
+    response_model=LogisticsSalesJobResponse,
+)
+async def export_logistics_sales_workbook(
+    request: LogisticsSalesPreviewRequest | None = None,
+):
+    """Generate a temporary workbook from PostgreSQL, without a local file path."""
+    try:
+        return await cached_logistics_sales_workflow.start_export(
+            force_refresh=bool(request and request.force_refresh)
+        )
+    except (McpError, LogisticsWorkflowError) as exc:
+        detail = str(exc) or "物流销量 Excel 导出失败，请检查数据库和领星配置"
+        logger.warning("Logistics sales workbook export rejected: %s", detail)
+        raise HTTPException(status_code=422, detail=detail) from exc
+    except Exception as exc:
+        logger.exception("Logistics sales workbook export failed")
+        raise HTTPException(status_code=500, detail="物流销量 Excel 导出失败") from exc
+
+
+@router.get(
+    "/logistics/sales-to-stock-sheet/export/{job_id}",
+    response_model=LogisticsSalesJobResponse,
+)
+async def logistics_sales_export_status(job_id: str):
+    try:
+        return await cached_logistics_sales_workflow.job_status(job_id)
+    except LogisticsWorkflowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get(
+    "/logistics/sales-to-stock-sheet/export/{job_id}/download",
+)
+async def download_logistics_sales_workbook(job_id: str):
+    artifact = cached_logistics_sales_workflow.get_export_file(job_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Excel 文件不存在或已过期，请重新生成")
+    content, filename = artifact
+    encoded_filename = quote(filename)
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="logistics-stock-export.xlsx"; '
+                f"filename*=UTF-8''{encoded_filename}"
+            ),
+            "Cache-Control": "no-store, max-age=0",
+        },
+    )

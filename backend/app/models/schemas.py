@@ -55,6 +55,22 @@ class LogisticsSalesExecuteResponse(BaseModel):
     updated_at: str
 
 
+class LogisticsSalesExportResponse(BaseModel):
+    """A short-lived workbook generated from PostgreSQL data."""
+
+    status: str
+    filename: str
+    download_url: str
+    sheet: str
+    target_columns: str
+    total_rows: int
+    matched_rows: int
+    missing_rows: int
+    duplicate_groups: int
+    warnings: list[LogisticsWorkflowWarning]
+    expires_at: str
+
+
 class LogisticsSalesJobResponse(BaseModel):
     status: str
     job_id: str
@@ -63,3 +79,4 @@ class LogisticsSalesJobResponse(BaseModel):
     error: str = ""
     preview: LogisticsSalesPreviewResponse | None = None
     result: LogisticsSalesExecuteResponse | None = None
+    export: LogisticsSalesExportResponse | None = None
