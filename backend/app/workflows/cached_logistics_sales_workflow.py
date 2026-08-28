@@ -112,7 +112,8 @@ class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
 
             unique_skus = sorted({key.sku for key in groups if key.sku})
             today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
-            sync_start = today - timedelta(days=settings.LOGISTICS_INITIAL_SYNC_DAYS - 1)
+            # Sync the full number of completed days requested (today excluded).
+            sync_start = today - timedelta(days=settings.LOGISTICS_INITIAL_SYNC_DAYS)
             sync_end = today - timedelta(days=1)
             await self._ensure_cache(
                 job_id,
@@ -405,7 +406,7 @@ class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
             )
             unique_skus = sorted({key.sku for key in groups})
             today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
-            sync_start = today - timedelta(days=settings.LOGISTICS_INITIAL_SYNC_DAYS - 1)
+            sync_start = today - timedelta(days=settings.LOGISTICS_INITIAL_SYNC_DAYS)
             sync_end = today - timedelta(days=1)
             await self._ensure_cache(
                 job_id,
