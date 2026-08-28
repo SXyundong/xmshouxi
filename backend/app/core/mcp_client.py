@@ -49,11 +49,10 @@ class StreamableHttpMcpClient:
             init = await client.post(
                 self.url,
                 headers=headers,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
+                json=self._rpc_request(
+                    1,
+                    "initialize",
+                    {
                         "protocolVersion": "2025-06-18",
                         "capabilities": {},
                         "clientInfo": {
@@ -61,7 +60,7 @@ class StreamableHttpMcpClient:
                             "version": "1.0.0",
                         },
                     },
-                },
+                ),
             )
             init.raise_for_status()
             session_id = init.headers.get("mcp-session-id")
@@ -71,27 +70,112 @@ class StreamableHttpMcpClient:
             initialized = await client.post(
                 self.url,
                 headers=headers,
-                json={
-                    "jsonrpc": "2.0",
-                    "method": "notifications/initialized",
-                    "params": {},
-                },
+                json=self._rpc_request(None, "notifications/initialized", {}),
             )
             initialized.raise_for_status()
 
-            response = await client.post(
-                self.url,
-                headers=headers,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": 2,
-                    "method": "tools/call",
-                    "params": {"name": name, "arguments": arguments},
-                },
-            )
-            response.raise_for_status()
-            payload = self._decode_response(response)
+            try:
+                payload = await self._call_mcp_tool(
+                    client,
+                    headers,
+                    name,
+                    arguments,
+                    request_id=2,
+                )
+                return self._parse_tool_result(payload)
+            except McpError as exc:
+                # LingXing's current public server exposes a tool gateway
+                # (help/search/action) instead of the business tool names in
+                # tools/list. Fall back only for an unknown-tool response so
+                # real permission and parameter errors remain visible.
+                if not self._is_unknown_tool_error(exc):
+                    raise
+                logger.info(
+                    "LingXing MCP tool %s is behind the help/search/action gateway",
+                    name,
+                )
+                return await self._call_via_gateway(
+                    client,
+                    headers,
+                    name,
+                    arguments,
+                    request_id=10,
+                )
 
+    async def _call_via_gateway(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        name: str,
+        arguments: dict[str, Any],
+        request_id: int,
+    ) -> Any:
+        help_payload = await self._call_mcp_tool(
+            client,
+            headers,
+            "help",
+            {"query": name, "limit": 50, "offset": 0},
+            request_id=request_id,
+        )
+        help_result = self._parse_tool_result(help_payload)
+        tool = self._find_gateway_tool(help_result, name)
+        if tool is None:
+            raise McpError(f"领星 MCP 未找到业务工具：{name}")
+        tool_id = str(tool.get("toolId") or name)
+
+        search_payload = await self._call_mcp_tool(
+            client,
+            headers,
+            "search",
+            {"toolId": tool_id},
+            request_id=request_id + 1,
+        )
+        search_result = self._parse_tool_result(search_payload)
+        search_data = search_result.get("data") if isinstance(search_result, dict) else None
+        if not isinstance(search_data, dict):
+            raise McpError("领星 MCP search 没有返回业务工具 Schema")
+        catalog_version = search_data.get("catalogVersion")
+        schema_version = search_data.get("schemaVersion")
+        if not catalog_version or not schema_version:
+            raise McpError("领星 MCP search 返回的版本信息不完整")
+
+        action_payload = await self._call_mcp_tool(
+            client,
+            headers,
+            "action",
+            {
+                "toolId": tool_id,
+                "catalogVersion": catalog_version,
+                "schemaVersion": schema_version,
+                "paramsJson": json.dumps(
+                    arguments,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+            },
+            request_id=request_id + 2,
+        )
+        return self._parse_tool_result(action_payload)
+
+    async def _call_mcp_tool(
+        self,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        name: str,
+        arguments: dict[str, Any],
+        request_id: int,
+    ) -> dict[str, Any]:
+        response = await client.post(
+            self.url,
+            headers=headers,
+            json=self._rpc_request(
+                request_id,
+                "tools/call",
+                {"name": name, "arguments": arguments},
+            ),
+        )
+        response.raise_for_status()
+        payload = self._decode_response(response)
         if payload.get("error"):
             error = payload["error"]
             logger.warning(
@@ -101,6 +185,22 @@ class StreamableHttpMcpClient:
                 repr(error.get("data"))[:500],
             )
             raise McpError(error.get("message") or error.get("data") or "领星 MCP 调用失败")
+        return payload
+
+    @staticmethod
+    def _rpc_request(
+        request_id: int | None,
+        method: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        request: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if request_id is not None:
+            request["id"] = request_id
+        request["params"] = params
+        return request
+
+    @staticmethod
+    def _parse_tool_result(payload: dict[str, Any]) -> Any:
         result = payload.get("result", {})
         tool_error = result.get("isError")
         for content in result.get("content", []):
@@ -130,3 +230,23 @@ class StreamableHttpMcpClient:
             logger.warning("LingXing MCP tool error: response had no text content")
             raise McpError("领星 MCP 工具执行失败")
         raise McpError("领星 MCP 没有返回可解析的数据")
+
+    @staticmethod
+    def _find_gateway_tool(result: Any, name: str) -> dict[str, Any] | None:
+        if not isinstance(result, dict):
+            return None
+        data = result.get("data")
+        if not isinstance(data, dict):
+            return None
+        tools = data.get("tools")
+        if not isinstance(tools, list):
+            return None
+        for tool in tools:
+            if isinstance(tool, dict) and tool.get("toolId") == name:
+                return tool
+        return None
+
+    @staticmethod
+    def _is_unknown_tool_error(error: McpError) -> bool:
+        message = str(error).lower()
+        return "unknown tool" in message or "tool not found" in message or "not found" in message
