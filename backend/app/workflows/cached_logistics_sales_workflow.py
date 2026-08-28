@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from datetime import date, datetime, timedelta
-from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -16,33 +15,40 @@ from app.workflows.logistics_sales_workflow import (
     ProductKey,
     WorkflowPlan,
 )
-from app.workflows.sales_cache import DailySalesRecord, SalesCache
+from app.workflows.sales_cache import DailySalesRecord
+from app.workflows.postgres_sales_cache import PostgresSalesCache
 
 
 class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
-    """Run long LingXing syncs in a background task and compute from SQLite."""
+    """Run long LingXing syncs in a background task and compute from PostgreSQL."""
 
     CACHE_BATCH_SIZE = 40
     QUERY_GAP_SECONDS = 1.1
 
     def __init__(self):
         super().__init__()
-        self.cache = SalesCache(Path(settings.LOGISTICS_SALES_DB_PATH))
+        self.cache = PostgresSalesCache()
         self._tasks: dict[str, asyncio.Task[Any]] = {}
         self._job_results: dict[str, dict[str, Any]] = {}
+        self._execute_results: dict[str, dict[str, Any]] = {}
         # A single process-wide gate protects the MCP QPS=1 contract, including
         # overlapping preview requests started by different browser sessions.
         self._sync_lock = asyncio.Lock()
 
-    async def start_preview(self) -> dict[str, Any]:
-        job_id = self.cache.create_job("等待后台同步")
-        task = asyncio.create_task(self._run_preview(job_id))
+    async def start_preview(self, force_refresh: bool = False) -> dict[str, Any]:
+        message = "等待从领星强制刷新" if force_refresh else "等待后台同步"
+        job_id = self.cache.create_job(message)
+        task = asyncio.create_task(self._run_preview(job_id, force_refresh))
         self._tasks[job_id] = task
         return {
             "status": "queued",
             "job_id": job_id,
             "progress": 0,
-            "message": "任务已创建，等待后台同步",
+            "message": (
+                "任务已创建，准备从领星强制刷新"
+                if force_refresh
+                else "任务已创建，等待后台同步"
+            ),
             "error": "",
             "preview": None,
         }
@@ -59,13 +65,63 @@ class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
             "message": job["message"],
             "error": job["error"],
             "preview": result,
+            "result": self._execute_results.get(job_id),
         }
 
-    async def _run_preview(self, job_id: str) -> None:
-        async with self._sync_lock:
-            await self._run_preview_locked(job_id)
+    async def start_execute(self, preview_id: str) -> dict[str, Any]:
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        self._purge_expired_previews(now)
+        if preview_id not in self._previews:
+            raise LogisticsWorkflowError("预览不存在或已过期，请重新生成预览")
+        job_id = self.cache.create_job("等待写入备货表")
+        task = asyncio.create_task(self._run_execute(job_id, preview_id))
+        self._tasks[job_id] = task
+        return {
+            "status": "queued",
+            "job_id": job_id,
+            "progress": 0,
+            "message": "写入任务已创建，等待执行",
+            "error": "",
+            "preview": None,
+            "result": None,
+        }
 
-    async def _run_preview_locked(self, job_id: str) -> None:
+    async def _run_execute(self, job_id: str, preview_id: str) -> None:
+        try:
+            self.cache.update_job(job_id, "running", 5, "正在校验预览文件")
+            now = datetime.now(ZoneInfo("Asia/Shanghai"))
+            self._purge_expired_previews(now)
+            plan = self._previews.get(preview_id)
+            if plan is None:
+                raise LogisticsWorkflowError("预览不存在或已过期，请重新生成预览")
+            if self._file_hash(plan.workbook_path) != plan.workbook_hash:
+                self._previews.pop(preview_id, None)
+                raise LogisticsWorkflowError("预览后测试表已发生变化，为避免错行写入请重新预览")
+            self.cache.update_job(job_id, "running", 10, "正在写入并校验备货表")
+            async with self._write_lock:
+                await asyncio.to_thread(self._write_workbook, plan)
+            result = {
+                "status": "success",
+                "workbook": plan.workbook_path.name,
+                "sheet": self.SHEET_NAME,
+                "target_columns": "AJ:AM",
+                "updated_rows": len(plan.updates),
+                "skipped_rows": plan.missing_rows,
+                "duplicate_groups": plan.duplicate_groups,
+                "warnings": plan.warnings,
+                "updated_at": datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds"),
+            }
+            self._execute_results[job_id] = result
+            self._previews.pop(preview_id, None)
+            self.cache.update_job(job_id, "complete", 100, "备货表写入完成")
+        except Exception as exc:
+            self.cache.update_job(job_id, "failed", 100, "写入失败", str(exc))
+
+    async def _run_preview(self, job_id: str, force_refresh: bool = False) -> None:
+        async with self._sync_lock:
+            await self._run_preview_locked(job_id, force_refresh)
+
+    async def _run_preview_locked(self, job_id: str, force_refresh: bool = False) -> None:
         try:
             self.cache.update_job(job_id, "running", 2, "正在读取测试表")
             target = self._target_path()
@@ -82,6 +138,7 @@ class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
                 unique_skus,
                 sync_start,
                 sync_end,
+                force_refresh=force_refresh,
             )
             self.cache.update_job(job_id, "running", 92, "正在按排除当天的规则计算销量")
             updates, keys_by_row, match_warnings, missing_rows = await asyncio.to_thread(
@@ -135,8 +192,19 @@ class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
         skus: list[str],
         start: date,
         end: date,
+        force_refresh: bool = False,
     ) -> None:
-        missing = self.cache.missing_dates(skus, start, end)
+        if force_refresh:
+            wanted_dates = self.cache.date_range(start, end)
+            missing = {sku: wanted_dates for sku in sorted(set(skus))}
+        else:
+            missing = self.cache.missing_dates(skus, start, end)
+            # Yesterday can still be corrected in LingXing. Refresh it before
+            # calculating rolling periods even when coverage is marked complete.
+            for sku in sorted(set(skus)):
+                dates = missing.setdefault(sku, [])
+                if end not in dates:
+                    dates.append(end)
         ranges: dict[tuple[date, date], list[str]] = defaultdict(list)
         for sku, dates in missing.items():
             for range_start, range_end in self._contiguous_ranges(dates):
@@ -147,7 +215,7 @@ class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
             for sku_batch in self._chunks(sorted(range_skus), self.CACHE_BATCH_SIZE)
         ]
         if not requests:
-            self.cache.update_job(job_id, "running", 90, "SQLite 缓存已覆盖所需日期")
+            self.cache.update_job(job_id, "running", 90, "PostgreSQL 销量缓存已覆盖所需日期")
             return
         for index, (range_start, range_end, sku_batch) in enumerate(requests, start=1):
             progress = 5 + int(index / len(requests) * 84)
@@ -191,6 +259,9 @@ class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
                 range_start,
                 range_end,
                 trace_id,
+                # The queried range is authoritative, including zero-sales
+                # responses, so remove stale rows from that exact range first.
+                replace_existing=True,
             )
 
     @staticmethod

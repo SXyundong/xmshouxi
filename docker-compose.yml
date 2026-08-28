@@ -1,23 +1,45 @@
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: ecommerce-agent-db
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-ecommerce_agent}
+      - POSTGRES_USER=${POSTGRES_USER:-ecommerce}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ecommerce}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ecommerce} -d ${POSTGRES_DB:-ecommerce_agent}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   backend:
     build: ./backend
     container_name: ecommerce-agent-backend
     ports:
       - "8000:8000"
     environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://ecommerce:ecommerce@db:5432/ecommerce_agent}
+      - DB_ECHO=${DB_ECHO:-false}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - MODEL=${MODEL:-gpt-4o-mini}
       - LINGXING_MCP_URL=${LINGXING_MCP_URL:-https://openmcp.lingxing.com/mcp-servers/lingxing-mcp}
       - LINGXING_MCP_KEY=${LINGXING_MCP_KEY:-}
       - STOCK_WORKBOOK_PATH=${STOCK_WORKBOOK_PATH:-/workbook/备货逻辑看板表.xlsx}
-      - LOGISTICS_SALES_DB_PATH=/data/logistics_sales.sqlite3
       - LOGISTICS_INITIAL_SYNC_DAYS=60
       - LOGISTICS_LOOKBACK_DAYS=30
       - NETWORK_WORKBOOK_WRITE_ENABLED=false
     volumes:
-      - "${HOST_STOCK_WORKBOOK_DIRECTORY:-C:/Users/Administrator/Desktop/物流工作流测试2}:/workbook"
+      - "${HOST_STOCK_WORKBOOK_DIRECTORY:-C:/Users/Administrator/Desktop/物流工作流测试3}:/workbook"
       - "${HOST_LOGISTICS_CACHE_DIRECTORY:-C:/Users/Administrator/Desktop/物流工作流测试}:/data"
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
   frontend:
@@ -33,3 +55,6 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+
+volumes:
+  postgres_data:

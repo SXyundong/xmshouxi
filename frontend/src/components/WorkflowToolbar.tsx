@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   executeLogisticsSalesWorkflow,
+  waitForLogisticsSalesExecute,
   getLogisticsSalesPreviewStatus,
   LogisticsWorkflowJob,
   LogisticsWorkflowPreview,
@@ -88,6 +89,7 @@ export default function WorkflowToolbar({ department, compact = false }: Props) 
   const [expanded, setExpanded] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+  const [forceRefresh, setForceRefresh] = useState(false);
   const resizing = useRef(false);
   const busy = phase !== 'idle';
   const canShowTool = department === 'logistics';
@@ -105,11 +107,12 @@ export default function WorkflowToolbar({ department, compact = false }: Props) 
   function beginResize(event: React.PointerEvent<HTMLDivElement>) { event.preventDefault(); resizing.current = true; document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none'; }
   function resetWidth() { setPanelWidth(DEFAULT_PANEL_WIDTH); }
 
-  async function createPreview() {
+  async function createPreview(force = false) {
     if (busy) return;
-    setPhase('previewing'); setExpanded(true); setPreview(null); setResult(null); setError('');
+    if (force && !window.confirm('将跳过PostgreSQL缓存，重新查询表格中的全部商品。领星调用可能持续一段时间，是否继续？')) return;
+    setForceRefresh(force); setPhase('previewing'); setExpanded(true); setPreview(null); setResult(null); setError('');
     try {
-      const started = await startLogisticsSalesPreview(); setJob(started); let current = started;
+      const started = await startLogisticsSalesPreview(force); setJob(started); let current = started;
       while (current.status !== 'complete' && current.status !== 'failed') { await new Promise((resolve) => setTimeout(resolve, 1800)); current = await getLogisticsSalesPreviewStatus(started.job_id); setJob(current); }
       if (current.status === 'failed') throw new Error(current.error || '物流销量预览失败');
       if (!current.preview) throw new Error('预览任务已完成，但没有返回预览数据');
@@ -120,7 +123,7 @@ export default function WorkflowToolbar({ department, compact = false }: Props) 
   async function confirmWrite() {
     if (busy || !preview?.can_execute) return;
     setPhase('executing'); setExpanded(true); setError('');
-    try { const response = await executeLogisticsSalesWorkflow(preview.preview_id); setResult(response); setPreview(null); } catch (reason) { setError(reason instanceof Error ? reason.message : '写入失败'); } finally { setPhase('idle'); }
+    try { const started = await executeLogisticsSalesWorkflow(preview.preview_id); const response = await waitForLogisticsSalesExecute(started.job_id); setResult(response); setPreview(null); } catch (reason) { setError(reason instanceof Error ? reason.message : '写入失败'); } finally { setPhase('idle'); }
   }
 
   function ToolCard({ drawer = false }: { drawer?: boolean }) {
@@ -129,7 +132,7 @@ export default function WorkflowToolbar({ department, compact = false }: Props) 
       <button type="button" onClick={() => setExpanded((current) => !current)} className="flex w-full items-center gap-3 text-left" aria-expanded={expanded}><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-cyan-200/15 bg-cyan-300/[0.07] text-cyan-100"><svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 7h11v10H4V7Zm11 3h3l2 3v4h-5v-7ZM7 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm10 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" /></svg></div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-[11px] font-medium text-white/85">全商品滚动销量同步</span><StatusBadge phase={phase} job={job} preview={preview} result={result} error={error} /></div><div className="mt-1 flex min-w-0 items-center gap-2"><ToolSummary phase={phase} job={job} preview={preview} result={result} error={error} /></div></div><span className={`shrink-0 text-sm text-white/30 transition-transform ${expanded ? 'rotate-180' : ''}`}>⌄</span></button>
       {expanded && <div className="mt-4 border-t border-white/[0.07] pt-4"><div className="flex items-start justify-between gap-3"><div><h3 className="text-[11px] font-medium leading-5 text-white/80">备货逻辑看板销量更新</h3><p className="mt-1 text-[9px] leading-4 text-white/30">按 A–F 完整匹配商品，重复行写入相同销量；未找到的行保持原值。</p></div><span className="rounded-full bg-cyan-300/[0.07] px-2 py-1 text-[8px] uppercase tracking-wider text-cyan-100/55">Local test</span></div><div className="mt-3 grid grid-cols-4 gap-1">{[3, 7, 15, 30].map((days) => <div key={days} className="rounded-md bg-white/[0.035] py-1.5 text-center text-[9px] text-white/35">{days} 天</div>)}</div>
         {phase === 'previewing' && <div className="mt-3 rounded-xl border border-cyan-200/15 bg-cyan-300/[0.045] p-3"><div className="flex items-center justify-between gap-2 text-[9px] text-cyan-100/70"><span className="truncate">{job?.message || '正在准备任务…'}</span><span className="shrink-0 tabular-nums">{job?.progress || 0}%</span></div><div className="mt-2 h-1 overflow-hidden rounded-full bg-white/[0.08]"><div className="h-full rounded-full bg-cyan-200/70 transition-all" style={{ width: `${job?.progress || 0}%` }} /></div></div>}
-        {!preview && !result && <button type="button" onClick={createPreview} disabled={busy} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-white/[0.09] bg-white/[0.055] px-3 py-2.5 text-[10px] font-medium text-white/75 transition hover:bg-white/[0.08] disabled:cursor-wait disabled:opacity-50"><svg className={`h-3.5 w-3.5 ${phase === 'previewing' ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v6h-6" strokeLinecap="round" strokeLinejoin="round" /></svg>{phase === 'previewing' ? '正在查询并核对…' : '生成写入预览'}</button>}
+        {!preview && !result && <div className="mt-4 space-y-2"><button type="button" onClick={() => createPreview(false)} disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-xl border border-white/[0.09] bg-white/[0.055] px-3 py-2.5 text-[10px] font-medium text-white/75 transition hover:bg-white/[0.08] disabled:cursor-wait disabled:opacity-50"><svg className={`h-3.5 w-3.5 ${phase === 'previewing' && !forceRefresh ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v6h-6" strokeLinecap="round" strokeLinejoin="round" /></svg>{phase === 'previewing' && !forceRefresh ? '正在生成预览…' : '生成写入预览'}</button><button type="button" onClick={() => createPreview(true)} disabled={busy} className="flex w-full items-center justify-center gap-2 rounded-xl border border-cyan-200/15 bg-cyan-300/[0.06] px-3 py-2.5 text-[10px] font-medium text-cyan-100/75 transition hover:bg-cyan-300/[0.1] disabled:cursor-wait disabled:opacity-50"><svg className={`h-3.5 w-3.5 ${phase === 'previewing' && forceRefresh ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v6h-6" strokeLinecap="round" strokeLinejoin="round" /></svg>{phase === 'previewing' && forceRefresh ? '正在从领星更新…' : '跳过缓存，从领星更新'}</button><p className="px-1 text-[9px] leading-4 text-white/25">普通预览优先使用PostgreSQL；强制更新会重新查询全部商品，受领星每秒1次调用限制。</p></div>}
         {preview && <div className="mt-3 rounded-xl border border-amber-200/15 bg-amber-300/[0.045] p-3"><div className="text-[10px] font-medium text-amber-100/80">等待确认 · {preview.workbook}</div><div className="mt-2 grid grid-cols-3 gap-1"><div className="rounded-md bg-black/15 px-1 py-2 text-center"><div className="text-xs tabular-nums text-white/85">{preview.matched_rows}</div><div className="mt-0.5 text-[8px] text-white/30">可写入</div></div><div className="rounded-md bg-black/15 px-1 py-2 text-center"><div className="text-xs tabular-nums text-amber-100/80">{preview.missing_rows}</div><div className="mt-0.5 text-[8px] text-white/30">未匹配</div></div><div className="rounded-md bg-black/15 px-1 py-2 text-center"><div className="text-xs tabular-nums text-amber-100/80">{preview.duplicate_groups}</div><div className="mt-0.5 text-[8px] text-white/30">重复组</div></div></div><WarningGroups warnings={preview.warnings} /><button type="button" onClick={confirmWrite} disabled={busy || !preview.can_execute} className="mt-3 flex w-full items-center justify-center rounded-xl bg-emerald-200 px-3 py-2.5 text-[10px] font-medium text-[#12201c] transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-40">{phase === 'executing' ? '正在写入并校验…' : `确认写入 ${preview.matched_rows} 行`}</button></div>}
         {result && <div className="mt-3 rounded-xl border border-emerald-200/15 bg-emerald-300/[0.055] p-3"><div className="text-[10px] font-medium text-emerald-100/80">写入成功 · {result.target_columns}</div><p className="mt-1.5 text-[9px] leading-4 text-white/40">已更新 {result.updated_rows} 行，跳过 {result.skipped_rows} 行，并完成写后校验。</p><WarningGroups warnings={result.warnings} /></div>}
         {error && <div className="mt-3 rounded-xl border border-rose-300/15 bg-rose-300/[0.055] p-3 text-[10px] leading-5 text-rose-100/70">{error}</div>}

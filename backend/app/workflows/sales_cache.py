@@ -158,11 +158,22 @@ class SalesCache:
         start: date,
         end: date,
         trace_id: str = "",
+        replace_existing: bool = False,
     ) -> None:
         fetched_at = self._now()
         record_list = list(records)
         requested_skus = sorted(set(skus))
         with self._lock, self._connect() as connection:
+            if replace_existing and requested_skus:
+                placeholders = ",".join("?" for _ in requested_skus)
+                connection.execute(
+                    f"""
+                    DELETE FROM daily_sales
+                    WHERE sku IN ({placeholders})
+                      AND sales_date BETWEEN ? AND ?
+                    """,
+                    [*requested_skus, start.isoformat(), end.isoformat()],
+                )
             for record in record_list:
                 connection.execute(
                     """

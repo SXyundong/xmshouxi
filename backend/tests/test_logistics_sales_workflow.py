@@ -292,6 +292,41 @@ class SalesCacheTests(unittest.TestCase):
             self.assertEqual(updates[2], (9, 9, 9, 9))
             self.assertFalse(warnings)
 
+    def test_force_refresh_replaces_stale_daily_rows(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache = SalesCache(Path(temp_dir) / "sales.sqlite3")
+            start = datetime(2026, 8, 20).date()
+            end = datetime(2026, 8, 20).date()
+            stale = DailySalesRecord(
+                sales_date="2026-08-20",
+                sku="SKU-1",
+                amazon_sku="ASIN-1",
+                product_name="商品",
+                category="品类",
+                store="店铺",
+                country="美国",
+                platform="",
+                volume=99,
+            )
+            fresh = DailySalesRecord(
+                sales_date="2026-08-20",
+                sku="SKU-1",
+                amazon_sku="ASIN-1",
+                product_name="商品",
+                category="品类",
+                store="店铺",
+                country="美国",
+                platform="",
+                volume=13,
+            )
+            cache.save_daily_records([stale], ["SKU-1"], start, end, "old")
+            cache.save_daily_records(
+                [fresh], ["SKU-1"], start, end, "new", replace_existing=True
+            )
+            records = cache.daily_records("SKU-1", start, end)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].volume, 13)
+
 
 if __name__ == "__main__":
     unittest.main()

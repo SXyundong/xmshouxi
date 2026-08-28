@@ -35,6 +35,10 @@ class LogisticsSalesPreviewResponse(BaseModel):
     expires_at: str
 
 
+class LogisticsSalesPreviewRequest(BaseModel):
+    force_refresh: bool = False
+
+
 class LogisticsSalesExecuteRequest(BaseModel):
     preview_id: str
 
@@ -58,3 +62,4 @@ class LogisticsSalesJobResponse(BaseModel):
     message: str
     error: str = ""
     preview: LogisticsSalesPreviewResponse | None = None
+    result: LogisticsSalesExecuteResponse | None = None

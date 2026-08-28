@@ -7,6 +7,7 @@ from app.models.schemas import (
     LogisticsSalesExecuteRequest,
     LogisticsSalesExecuteResponse,
     LogisticsSalesJobResponse,
+    LogisticsSalesPreviewRequest,
     LogisticsSalesPreviewResponse,
 )
 from app.workflows.logistics_sales_workflow import (
@@ -25,10 +26,14 @@ router = APIRouter(prefix="/api/workflows", tags=["workflows"])
     "/logistics/sales-to-stock-sheet/preview",
     response_model=LogisticsSalesJobResponse,
 )
-async def preview_logistics_sales_workflow():
+async def preview_logistics_sales_workflow(
+    request: LogisticsSalesPreviewRequest | None = None,
+):
     """Start an asynchronous cache refresh and preview job."""
     try:
-        return await cached_logistics_sales_workflow.start_preview()
+        return await cached_logistics_sales_workflow.start_preview(
+            force_refresh=bool(request and request.force_refresh)
+        )
     except (McpError, LogisticsWorkflowError) as exc:
         detail = str(exc) or "物流销量预览失败，请检查领星 MCP 配置和权限"
         logger.warning("Logistics sales workflow preview rejected: %s", detail)
@@ -51,13 +56,12 @@ async def logistics_sales_preview_status(job_id: str):
 
 @router.post(
     "/logistics/sales-to-stock-sheet/execute",
-    response_model=LogisticsSalesExecuteResponse,
+    response_model=LogisticsSalesJobResponse,
 )
 async def execute_logistics_sales_workflow(request: LogisticsSalesExecuteRequest):
-    """Write a previously confirmed preview into the local workbook copy."""
+    """Queue writing a previously confirmed preview into the local workbook copy."""
     try:
-        result = await cached_logistics_sales_workflow.execute(request.preview_id)
-        return LogisticsSalesExecuteResponse(status="success", **result)
+        return await cached_logistics_sales_workflow.start_execute(request.preview_id)
     except (McpError, LogisticsWorkflowError) as exc:
         detail = str(exc) or "物流销量写入前校验失败"
         logger.warning("Logistics sales workflow execution rejected: %s", detail)
@@ -67,3 +71,14 @@ async def execute_logistics_sales_workflow(request: LogisticsSalesExecuteRequest
     except Exception as exc:
         logger.exception("Logistics sales workflow execution failed")
         raise HTTPException(status_code=500, detail="物流销量写入失败") from exc
+
+
+@router.get(
+    "/logistics/sales-to-stock-sheet/execute/{job_id}",
+    response_model=LogisticsSalesJobResponse,
+)
+async def logistics_sales_execute_status(job_id: str):
+    try:
+        return await cached_logistics_sales_workflow.job_status(job_id)
+    except LogisticsWorkflowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

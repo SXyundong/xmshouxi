@@ -54,6 +54,7 @@ export interface LogisticsWorkflowJob {
   message: string;
   error: string;
   preview: LogisticsWorkflowPreview | null;
+  result: LogisticsWorkflowResult | null;
 }
 
 export async function sendChat(
@@ -81,19 +82,25 @@ async function parseWorkflowResponse<T>(res: Response): Promise<T> {
   return body;
 }
 
-export async function previewLogisticsSalesWorkflow(): Promise<LogisticsWorkflowPreview> {
+export async function previewLogisticsSalesWorkflow(
+  forceRefresh = false,
+): Promise<LogisticsWorkflowPreview> {
   const res = await fetch('/api/workflows/logistics/sales-to-stock-sheet/preview', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force_refresh: forceRefresh }),
   });
   const job = await parseWorkflowResponse<LogisticsWorkflowJob>(res);
   return waitForLogisticsSalesPreview(job.job_id);
 }
 
-export async function startLogisticsSalesPreview(): Promise<LogisticsWorkflowJob> {
+export async function startLogisticsSalesPreview(
+  forceRefresh = false,
+): Promise<LogisticsWorkflowJob> {
   const res = await fetch('/api/workflows/logistics/sales-to-stock-sheet/preview', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force_refresh: forceRefresh }),
   });
   return parseWorkflowResponse<LogisticsWorkflowJob>(res);
 }
@@ -117,11 +124,28 @@ export async function waitForLogisticsSalesPreview(jobId: string): Promise<Logis
 
 export async function executeLogisticsSalesWorkflow(
   previewId: string,
-): Promise<LogisticsWorkflowResult> {
+): Promise<LogisticsWorkflowJob> {
   const res = await fetch('/api/workflows/logistics/sales-to-stock-sheet/execute', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ preview_id: previewId }),
   });
-  return parseWorkflowResponse<LogisticsWorkflowResult>(res);
+  return parseWorkflowResponse<LogisticsWorkflowJob>(res);
+}
+
+export async function getLogisticsSalesExecuteStatus(jobId: string): Promise<LogisticsWorkflowJob> {
+  const res = await fetch(`/api/workflows/logistics/sales-to-stock-sheet/execute/${jobId}`, {
+    method: 'GET',
+    cache: 'no-store',
+  });
+  return parseWorkflowResponse<LogisticsWorkflowJob>(res);
+}
+
+export async function waitForLogisticsSalesExecute(jobId: string): Promise<LogisticsWorkflowResult> {
+  for (;;) {
+    const job = await getLogisticsSalesExecuteStatus(jobId);
+    if (job.status === 'complete' && job.result) return job.result;
+    if (job.status === 'failed') throw new Error(job.error || '物流销量写入失败');
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
 }
