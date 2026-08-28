@@ -4,6 +4,12 @@ __pycache__/
 .venv/
 venv/
 .env
+.env.railway
+
+# Local database backups (may contain production-like data)
+backups/
+.railway-importer-tmp/
+.railway-schema-runner-tmp/
 
 # Node
 node_modules/

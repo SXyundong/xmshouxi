@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+.env.*
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+frontend/node_modules
+frontend/.next
+backups
+.railway-importer-tmp
+.railway-schema-runner-tmp
+.tmp_read_ergolife
+outputs
+reports
+tools
