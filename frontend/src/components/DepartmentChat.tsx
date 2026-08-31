@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { sendChat } from '@/services/api';
 import { departments } from '@/services/departments';
 import WorkflowToolbar from '@/components/WorkflowToolbar';
@@ -10,71 +10,58 @@ interface Message { role: 'user' | 'assistant'; content: string; }
 interface Props { department: string; name: string; emoji: string; description: string; }
 
 const suggestions: Record<string, string[]> = {
-  sales: ['分析昨天的销售表现', '找出销量增长最快的 SKU', '生成本周销售摘要'],
-  inventory: ['查看当前库存风险', '列出需要补货的 SKU', '分析库存周转情况'],
-  logistics: ['检查异常物流订单', '汇总今日配送情况', '分析物流时效'],
-  product: ['推荐近期选品方向', '评估新品市场机会', '分析潜力品类'],
-  ads: ['分析广告投放表现', '给出预算优化建议', '诊断低效广告组'],
-  operation: ['制定本周运营计划', '复盘近期活动效果', '设计提升转化方案'],
-  finance: ['生成经营数据摘要', '分析近期成本变化', '查看利润表现'],
-  design: ['规划新品视觉方向', '生成主图创意建议', '整理活动素材需求'],
-  hr: ['起草岗位招聘要求', '整理候选人评估维度', '规划本月招聘任务'],
+  sales: ['分析昨天的销售表现', '找出销量增长最快的 SKU', '生成本周销售摘要'], inventory: ['查看当前库存风险', '列出需要补货的 SKU', '分析库存周转情况'], logistics: ['检查异常物流订单', '汇总今日配送情况', '分析物流时效'], product: ['推荐近期选品方向', '评估新品市场机会', '分析潜力品类'], ads: ['分析广告投放表现', '给出预算优化建议', '诊断低效广告组'], operation: ['制定本周运营计划', '复盘近期活动效果', '设计提升转化方案'], finance: ['生成经营数据摘要', '分析近期成本变化', '查看利润表现'], design: ['规划新品视觉方向', '生成主图创意建议', '整理活动素材需求'], hr: ['起草岗位招聘要求', '整理候选人评估维度', '规划本月招聘任务'],
+};
+
+const initialChats: Record<string, string[]> = {
+  logistics: ['备货逻辑看板', '本周 FBA 库存预警', '美国站补货复盘', '新品首批发货计划'], sales: ['Q3 销售趋势分析', '重点 SKU 周报', '大促目标拆解', '客户反馈整理'], inventory: ['库存健康检查', '滞销品处理建议', '安全库存复盘'], product: ['新品机会分析', '竞品价格监控'], ads: ['广告花费周报', 'ASIN 投放建议', '关键词表现复盘'], operation: ['店铺经营日报', '大促活动计划', 'Listing 优化清单', '差评原因分析', '月度运营复盘'], finance: ['毛利与利润分析', '回款进度跟踪'], design: ['主图需求整理', '素材排期协作'], hr: ['招聘需求汇总'],
 };
 
 export default function DepartmentChat({ department, name, description }: Props) {
+  const [activeDepartment, setActiveDepartment] = useState(department);
+  const [expandedDepartments, setExpandedDepartments] = useState<Record<string, boolean>>({ [department]: true });
+  const [chatTitles, setChatTitles] = useState<Record<string, string[]>>(initialChats);
+  const [activeChat, setActiveChat] = useState(0);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const currentDepartment = useMemo(() => departments.find((item) => item.slug === activeDepartment) || { slug: activeDepartment, name, agentName: name, description, emoji: '✦' }, [activeDepartment, description, name]);
 
-  useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, loading]);
+  useEffect(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' }); }, [messages, loading]);
 
-  async function submit(text: string) {
-    const content = text.trim();
-    if (!content || loading) return;
-    setMessages((prev) => [...prev, { role: 'user', content }]);
-    setInput('');
-    setLoading(true);
-    try {
-      const res = await sendChat(department, content);
-      setMessages((prev) => [...prev, { role: 'assistant', content: res.answer }]);
-    } catch {
-      setMessages((prev) => [...prev, { role: 'assistant', content: '暂时无法连接服务，请检查后端运行状态后重试。' }]);
-    } finally { setLoading(false); }
+  function toggleDepartment(slug: string) {
+    if (slug !== activeDepartment) { setActiveDepartment(slug); setActiveChat(0); setMessages([]); setInput(''); setExpandedDepartments((current) => ({ ...current, [slug]: true })); return; }
+    setExpandedDepartments((current) => ({ ...current, [slug]: !current[slug] }));
   }
 
-  function handleSend(e: FormEvent<HTMLFormElement>) { e.preventDefault(); void submit(input); }
+  function createChat(slug = activeDepartment) {
+    setChatTitles((current) => ({ ...current, [slug]: ['新聊天', ...(current[slug] || [])] })); setActiveDepartment(slug); setActiveChat(0); setMessages([]); setInput(''); setExpandedDepartments((current) => ({ ...current, [slug]: true }));
+  }
 
-  return (
-    <main className="flex h-screen overflow-hidden bg-[#090a0d] p-0 md:p-3">
-      <aside className="glass-strong hidden w-[248px] shrink-0 flex-col rounded-2xl md:flex">
-        <Link href="/" className="flex items-center gap-3 border-b border-white/[0.07] px-4 py-5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-200/20 bg-emerald-300/10"><svg className="h-4 w-4 text-emerald-200" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M8 5.5 12 3l4 2.5v5L12 13l-4-2.5v-5Z"/><path d="m4 13 4 2.5v5L4 18v-5Zm12 2.5 4-2.5v5l-4 2.5v-5Z"/></svg></div>
-          <div><div className="text-xs font-semibold tracking-wide text-white">Nexus Commerce</div><div className="mt-0.5 text-[9px] uppercase tracking-[.18em] text-white/30">Agent Workspace</div></div>
-        </Link>
-        <div className="px-3 py-4"><div className="px-2 pb-2 text-[10px] font-medium uppercase tracking-[.16em] text-white/25">智能部门</div><nav className="space-y-1">{departments.map((dept)=><Link key={dept.slug} href={`/${dept.slug}`} className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-xs transition ${dept.slug===department?'border border-white/10 bg-white/[0.08] text-white shadow-lg shadow-black/10':'border border-transparent text-white/45 hover:bg-white/[0.04] hover:text-white/80'}`}><span className={`flex h-6 w-6 items-center justify-center rounded-md text-[10px] ${dept.slug===department?'bg-emerald-300/15 text-emerald-200':'bg-white/[0.05] text-white/40'}`}>{dept.name.slice(0,1)}</span><span className="flex-1">{dept.name}部门</span>{dept.slug===department&&<span className="h-1 w-1 rounded-full bg-emerald-300"/>}</Link>)}</nav></div>
-        <div className="mt-auto p-3"><div className="rounded-xl border border-white/[0.07] bg-white/[0.025] p-3"><div className="flex items-center gap-2 text-[11px] text-white/55"><span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_7px_rgba(110,231,183,.8)]"/>系统运行正常</div><p className="mt-1.5 text-[10px] leading-4 text-white/25">所有 Agent 服务均已连接</p></div></div>
-      </aside>
+  async function submit(text: string) {
+    const content = text.trim(); if (!content || loading) return;
+    setMessages((prev) => [...prev, { role: 'user', content }]); setInput(''); setLoading(true);
+    try { const res = await sendChat(activeDepartment, content); setMessages((prev) => [...prev, { role: 'assistant', content: res.answer }]); }
+    catch { setMessages((prev) => [...prev, { role: 'assistant', content: '暂时无法连接服务，请检查后端运行状态后重试。' }]); }
+    finally { setLoading(false); }
+  }
 
-      <section className="relative flex min-w-0 flex-1 flex-col">
-        <header className="flex h-[68px] items-center justify-between border-b border-white/[0.07] px-4 sm:px-7">
-          <div className="flex items-center gap-3"><Link href="/" className="mr-1 text-white/45 md:hidden">←</Link><div className="flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-gradient-to-br from-emerald-300/15 to-teal-400/5 text-xs font-semibold text-emerald-200">{name.slice(0,1)}</div><div><h1 className="text-sm font-medium text-white">{name}</h1><p className="mt-0.5 text-[10px] text-white/35">{description}</p></div></div>
-          <div className="flex items-center gap-2"><button title="清空对话" onClick={()=>setMessages([])} className="rounded-lg border border-white/[0.07] bg-white/[0.025] p-2 text-white/35 transition hover:bg-white/[0.06] hover:text-white/70"><svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 7h16m-10 4v6m4-6v6M9 7l1-3h4l1 3m3 0-1 14H7L6 7" strokeLinecap="round" strokeLinejoin="round"/></svg></button><div className="hidden rounded-full border border-emerald-300/10 bg-emerald-300/[0.06] px-2.5 py-1 text-[10px] text-emerald-200/70 sm:block">● 在线</div></div>
-        </header>
+  function handleSend(event: FormEvent<HTMLFormElement>) { event.preventDefault(); void submit(input); }
 
-        <div className="border-b border-white/[0.06] px-4 py-2 xl:hidden"><WorkflowToolbar department={department} compact /></div>
+  return <main className="agent-shell flex h-screen overflow-hidden bg-[#f7f8fb] p-0 md:p-3">
+    <aside className="agent-sidebar hidden w-[260px] shrink-0 flex-col rounded-2xl border border-[#e7ebf0] bg-white/85 shadow-[0_18px_55px_rgba(36,43,61,.07)] backdrop-blur-xl md:flex">
+      <Link href="/" className="agent-brand flex items-center gap-3 border-b border-[#eef1f4] px-5 py-5"><div className="agent-brand-mark flex h-9 w-9 items-center justify-center rounded-xl text-sm font-extrabold text-white">E</div><div><div className="text-sm font-extrabold tracking-tight text-[#202632]">ERGOLIFE</div><div className="mt-0.5 text-[9px] uppercase tracking-[.18em] text-[#a5acb7]">Agent Workspace</div></div></Link>
+      <div className="px-3 py-4"><button type="button" onClick={() => createChat()} className="agent-new-chat flex w-full items-center justify-center gap-2 rounded-xl bg-[#202632] px-3 py-3 text-xs font-bold text-white shadow-[0_8px_17px_rgba(32,38,50,.14)] transition hover:-translate-y-0.5 hover:bg-[#303746]"><span className="text-lg font-light leading-none">＋</span>新建聊天</button></div>
+      <div className="px-4 pb-2 text-[10px] font-extrabold uppercase tracking-[.13em] text-[#a5acb7]">部门工作区</div>
+      <nav className="flex-1 space-y-1 overflow-y-auto px-3 pb-4">
+        {departments.map((dept) => { const isActive = dept.slug === activeDepartment; const expanded = expandedDepartments[dept.slug]; return <div key={dept.slug} className="department-group"><div className="flex items-center gap-1"><button type="button" onClick={() => toggleDepartment(dept.slug)} className={`department-row group flex min-w-0 flex-1 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${isActive ? 'bg-[#e8f8f2] text-[#202632]' : 'text-[#687080] hover:bg-[#f4f6f9] hover:text-[#202632]'}`}><span className={`department-icon flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-xs ${isActive ? 'bg-white text-[#087b61] shadow-[0_3px_9px_rgba(16,163,127,.12)]' : 'bg-[#f1f3f7] text-[#87909d]'}`}>{dept.emoji}</span><span className="min-w-0 flex-1 truncate text-xs font-semibold">{dept.name}部门</span><span className={`text-[10px] ${isActive ? 'text-[#078565]' : 'text-[#a6adba]'}`}>{chatTitles[dept.slug]?.length || 0}</span></button><button type="button" onClick={() => createChat(dept.slug)} aria-label={`在${dept.name}部门新建聊天`} className="department-plus rounded-lg px-1.5 py-1 text-base leading-none text-[#b4bbc5] opacity-0 transition hover:bg-[#e8f8f2] hover:text-[#087b61] focus:opacity-100 group-hover:opacity-100">＋</button><button type="button" onClick={() => setExpandedDepartments((current) => ({ ...current, [dept.slug]: !current[dept.slug] }))} aria-label={`${expanded ? '收起' : '展开'}${dept.name}部门聊天`} aria-expanded={expanded} className={`rounded-lg px-1.5 py-1 text-sm leading-none text-[#aab1bd] transition hover:bg-[#f4f6f9] hover:text-[#087b61] ${expanded ? 'rotate-90 text-[#087b61]' : ''}`}>›</button></div>{expanded && <div className="nested-chat-list ml-5 mt-1 space-y-0.5 border-l border-[#dfeee8] pl-3">{(chatTitles[dept.slug] || []).map((title, index) => <button key={`${dept.slug}-${title}-${index}`} type="button" onClick={() => { setActiveDepartment(dept.slug); setActiveChat(index); setMessages([]); setExpandedDepartments((current) => ({ ...current, [dept.slug]: true })); }} className={`nested-chat-item flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[10px] transition ${isActive && index === activeChat ? 'bg-[#f0f3f6] font-bold text-[#202632]' : 'text-[#7f8794] hover:bg-[#f5f7f9] hover:text-[#202632]'}`}><span className={`h-1 w-1 shrink-0 rounded-full ${isActive && index === activeChat ? 'bg-[#10a37f] shadow-[0_0_0_3px_rgba(16,163,127,.12)]' : 'bg-[#cdd2db]'}`} />{title}</button>)}</div>}</div>; })}
+      </nav>
+      <div className="m-3 mt-auto flex items-center gap-2 border-t border-[#eef1f4] px-2 pt-4"><div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#eeeafd] text-[11px] font-extrabold text-[#6b51bb]">罗</div><div><div className="text-[11px] font-bold text-[#3d4451]">罗佳音</div><div className="mt-0.5 text-[10px] text-[#a0a7b2]">管理员 · 已连接</div></div><span className="ml-auto text-lg text-[#aeb4bf]">···</span></div>
+    </aside>
 
-        <div ref={listRef} className="flex-1 overflow-y-auto px-4 sm:px-8">
-          <div className="mx-auto flex min-h-full max-w-3xl flex-col pb-6">
-            {messages.length===0 ? <div className="my-auto py-12"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-emerald-200/15 bg-emerald-300/[0.07] shadow-[0_0_45px_rgba(52,211,153,.08)]"><svg className="h-5 w-5 text-emerald-200" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M12 3 9.8 8.8 4 11l5.8 2.2L12 19l2.2-5.8L20 11l-5.8-2.2L12 3Z"/></svg></div><h2 className="mt-5 text-center text-xl font-medium tracking-tight text-white">今天想从哪里开始？</h2><p className="mx-auto mt-2 max-w-md text-center text-sm leading-6 text-white/35">我是{name}，可以协助你处理{description}相关工作。</p><div className="mx-auto mt-8 grid max-w-xl gap-2 sm:grid-cols-3">{(suggestions[department]||[]).map(item=><button key={item} onClick={()=>void submit(item)} className="rounded-xl border border-white/[0.08] bg-white/[0.025] px-3 py-3 text-left text-xs leading-5 text-white/55 transition hover:-translate-y-0.5 hover:border-white/15 hover:bg-white/[0.055] hover:text-white/90">{item}<span className="mt-2 block text-white/20">↗</span></button>)}</div></div> : <div className="space-y-7 py-8">{messages.map((m,i)=><div key={i} className={`flex gap-3 ${m.role==='user'?'justify-end':'justify-start'}`}>{m.role==='assistant'&&<div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-emerald-200/10 bg-emerald-300/[0.07] text-[10px] text-emerald-200">AI</div>}<div className={m.role==='user'?'max-w-[82%] rounded-2xl rounded-tr-md border border-white/10 bg-white/[0.085] px-4 py-3 text-sm leading-7 text-white/90':'max-w-[85%] whitespace-pre-wrap py-1 text-sm leading-7 text-white/75'}>{m.content}</div></div>)}{loading&&<div className="flex items-center gap-3"><div className="flex h-7 w-7 items-center justify-center rounded-lg border border-emerald-200/10 bg-emerald-300/[0.07] text-[10px] text-emerald-200">AI</div><div className="flex gap-1 py-2"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/25" /><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/25" style={{animationDelay:'0.15s'}} /><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/25" style={{animationDelay:'0.3s'}} /></div></div>}</div>}
-          </div>
-        </div>
-
-        <div className="px-4 pb-4 sm:px-8 sm:pb-6"><form onSubmit={handleSend} className="glass mx-auto max-w-3xl rounded-2xl p-2 shadow-2xl shadow-black/30"><textarea rows={1} value={input} onChange={(e)=>setInput(e.target.value)} onKeyDown={(e)=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void submit(input);}}} placeholder={`向${name}发送消息…`} className="max-h-36 min-h-[48px] w-full resize-none bg-transparent px-3 py-3 text-sm leading-6 text-white outline-none placeholder:text-white/25"/><div className="flex items-center justify-between px-2 pb-1"><span className="hidden text-[10px] text-white/20 sm:block">Enter 发送 · Shift + Enter 换行</span><div className="ml-auto flex items-center gap-2"><span className="text-[10px] text-white/20">AI 生成内容仅供参考</span><button type="submit" disabled={loading||!input.trim()} className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-200 text-[#12201c] transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-25"><svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m5 12 7-7 7 7M12 5v14" strokeLinecap="round" strokeLinejoin="round"/></svg></button></div></div></form></div>
-      </section>
-      <WorkflowToolbar department={department} />
-    </main>
-  );
+    <section className="relative flex min-w-0 flex-1 flex-col"><header className="flex h-[68px] items-center justify-between border-b border-[#e9edf2] px-4 sm:px-7"><div className="flex min-w-0 items-center gap-3"><Link href="/" className="mr-1 text-sm text-[#7f8795] md:hidden">←</Link><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#e8f8f2] text-lg">{currentDepartment.emoji}</div><div className="min-w-0"><div className="flex items-center gap-2"><h1 className="truncate text-sm font-extrabold tracking-tight text-[#202632]">{currentDepartment.name} Agent</h1><span className="hidden rounded-full bg-[#e8f8f2] px-2 py-1 text-[9px] font-bold text-[#087b61] sm:inline">在线</span></div><p className="mt-0.5 truncate text-[10px] text-[#8c94a0]">{currentDepartment.description}</p></div></div><div className="flex items-center gap-2"><button title="清空对话" onClick={() => setMessages([])} className="rounded-lg border border-[#e9edf2] bg-white p-2 text-[#87909d] transition hover:border-[#cbece2] hover:text-[#087b61]"><svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 7h16m-10 4v6m4-6v6M9 7l1-3h4l1 3m3 0-1 14H7L6 7" strokeLinecap="round" strokeLinejoin="round" /></svg></button><div className="hidden items-center gap-1.5 rounded-full bg-white px-2.5 py-1.5 text-[10px] text-[#648175] sm:flex"><span className="h-1.5 w-1.5 rounded-full bg-[#22ba8a] shadow-[0_0_0_4px_rgba(34,186,138,.12)]" />系统运行正常</div></div></header>
+      <div className="border-b border-[#e9edf2] px-4 py-2 xl:hidden"><WorkflowToolbar department={activeDepartment} compact /></div><div ref={listRef} className="flex-1 overflow-y-auto px-4 sm:px-8"><div className="mx-auto flex min-h-full max-w-3xl flex-col pb-6">{messages.length === 0 ? <div className="my-auto py-12"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#e8f8f2] text-xl text-[#087b61] shadow-[0_0_35px_rgba(16,163,127,.12)]">✦</div><h2 className="mt-5 text-center text-xl font-bold tracking-tight text-[#202632]">今天想从哪里开始？</h2><p className="mx-auto mt-2 max-w-md text-center text-sm leading-6 text-[#8a929e]">我是{currentDepartment.agentName}，可以协助你处理{currentDepartment.description}相关工作。</p><div className="mx-auto mt-8 grid max-w-xl gap-2 sm:grid-cols-3">{(suggestions[activeDepartment] || []).map((item) => <button key={item} onClick={() => void submit(item)} className="group rounded-xl border border-[#e9edf2] bg-white px-3 py-3 text-left text-xs leading-5 text-[#687080] shadow-[0_8px_22px_rgba(36,43,61,.04)] transition hover:-translate-y-0.5 hover:border-[#cbece2] hover:bg-[#fbfffd] hover:text-[#202632]">{item}<span className="mt-2 block text-[#b5bdc8] transition group-hover:text-[#10a37f]">↗</span></button>)}</div></div> : <div className="space-y-7 py-8">{messages.map((message, index) => <div key={index} className={`flex gap-3 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>{message.role === 'assistant' && <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#e8f8f2] text-[10px] font-extrabold text-[#087b61]">AI</div>}<div className={message.role === 'user' ? 'max-w-[82%] rounded-2xl rounded-tr-md bg-[#303746] px-4 py-3 text-sm leading-7 text-white shadow-[0_8px_20px_rgba(32,38,50,.13)]' : 'max-w-[85%] whitespace-pre-wrap py-1 text-sm leading-7 text-[#4b5462]'}>{message.content}</div></div>)}{loading && <div className="flex items-center gap-3"><div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#e8f8f2] text-[10px] font-extrabold text-[#087b61]">AI</div><div className="flex gap-1 py-2"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#aeb6c1]" /><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#aeb6c1]" style={{ animationDelay: '0.15s' }} /><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#aeb6c1]" style={{ animationDelay: '0.3s' }} /></div></div>}</div>}</div></div><div className="px-4 pb-4 sm:px-8 sm:pb-6"><div className="mx-auto mb-2 flex max-w-3xl gap-2 overflow-x-auto">{(suggestions[activeDepartment] || []).map((item) => <button key={item} type="button" onClick={() => setInput(item)} className="shrink-0 rounded-full border border-[#e9edf2] bg-white px-3 py-1.5 text-[10px] text-[#7b8492] transition hover:border-[#cbece2] hover:bg-[#f5fffb] hover:text-[#087b61]">{item}</button>)}</div><form onSubmit={handleSend} className="mx-auto max-w-3xl rounded-2xl border border-[#dfe4eb] bg-white p-2 shadow-[0_10px_30px_rgba(54,61,79,.07)] transition focus-within:border-[#a9dfcf] focus-within:shadow-[0_10px_30px_rgba(16,163,127,.1)]"><textarea rows={1} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit(input); } }} placeholder={`向${currentDepartment.agentName}发送消息…`} className="max-h-36 min-h-[48px] w-full resize-none bg-transparent px-3 py-3 text-sm leading-6 text-[#202632] outline-none placeholder:text-[#aeb4c0]" /><div className="flex items-center justify-between px-2 pb-1"><span className="hidden text-[10px] text-[#b0b6c1] sm:block">Enter 发送 · Shift + Enter 换行</span><div className="ml-auto flex items-center gap-2"><span className="hidden text-[10px] text-[#b0b6c1] sm:inline">AI 生成内容仅供参考</span><button type="submit" disabled={loading || !input.trim()} className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#10a37f] text-white transition hover:bg-[#087b61] disabled:cursor-not-allowed disabled:opacity-25"><svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m5 12 7-7 7 7M12 5v14" strokeLinecap="round" /></svg></button></div></div></form></div></section>
+    <WorkflowToolbar department={activeDepartment} />
+  </main>;
 }
