@@ -21,7 +21,9 @@ body::before { position: fixed; inset: 0; z-index: -1; content: ""; pointer-even
 .department-plus { opacity: 0; }
 .department-group:hover .department-plus, .department-plus:focus { opacity: 1; }
 .workflow-light { color: #3d4654; border-color: #e7ebf0 !important; background: rgba(255,255,255,.9) !important; box-shadow: 0 18px 45px rgba(36,43,61,.08) !important; }
-.workflow-light [class*="text-white"] { color: #5e6877 !important; }
+.agent-shell [class*="text-[#"] { color: #222a35 !important; }
+.agent-shell textarea::placeholder { color: #687383 !important; }
+.workflow-light [class*="text-white"] { color: #222a35 !important; }
 .workflow-light [class*="text-cyan-100"] { color: #087b61 !important; }
 .workflow-light [class*="text-emerald-100"], .workflow-light [class*="text-emerald-200"] { color: #087b61 !important; }
 .workflow-light [class*="text-amber-100"], .workflow-light [class*="text-amber-200"] { color: #ad6b24 !important; }
