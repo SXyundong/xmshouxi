@@ -5,7 +5,7 @@
 :root { color-scheme: light; --background: #f7f8fb; --panel: rgba(255,255,255,.78); --panel-strong: rgba(255,255,255,.92); --line: #e9edf2; }
 * { box-sizing: border-box; }
 html { background: var(--background); }
-body { min-height: 100vh; margin: 0; background: radial-gradient(circle at 85% 0%,rgba(204,240,230,.62),transparent 31rem),radial-gradient(circle at 30% 100%,rgba(235,229,255,.46),transparent 31rem),var(--background); color: #202632; font-family: Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; -webkit-font-smoothing: antialiased; }
+body { min-height: 100vh; margin: 0; background: radial-gradient(circle at 85% 0%,rgba(204,240,230,.62),transparent 31rem),radial-gradient(circle at 30% 100%,rgba(235,229,255,.46),transparent 31rem),var(--background); color: #202632; font-family: "Microsoft YaHei UI","Microsoft YaHei","Segoe UI","PingFang SC",ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,sans-serif; }
 body::before { position: fixed; inset: 0; z-index: -1; content: ""; pointer-events: none; opacity: .32; background-image: linear-gradient(rgba(103,120,139,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(103,120,139,.035) 1px,transparent 1px); background-size: 52px 52px; mask-image: linear-gradient(to bottom,black,transparent 80%); }
 ::selection { background: rgba(16,163,127,.18); }
 ::-webkit-scrollbar { width: 8px; }
@@ -23,6 +23,9 @@ body::before { position: fixed; inset: 0; z-index: -1; content: ""; pointer-even
 .workflow-light { color: #3d4654; border-color: #e7ebf0 !important; background: rgba(255,255,255,.9) !important; box-shadow: 0 18px 45px rgba(36,43,61,.08) !important; }
 .agent-shell [class*="text-[#"] { color: #222a35 !important; }
 .agent-shell textarea::placeholder { color: #687383 !important; }
+.agent-shell [class*="text-[10px]"] { font-size: 11px !important; }
+.agent-shell [class*="text-[9px]"] { font-size: 10px !important; }
+.agent-shell [class*="text-[8px]"] { font-size: 10px !important; }
 .workflow-light [class*="text-white"] { color: #222a35 !important; }
 .workflow-light [class*="text-cyan-100"] { color: #087b61 !important; }
 .workflow-light [class*="text-emerald-100"], .workflow-light [class*="text-emerald-200"] { color: #087b61 !important; }
