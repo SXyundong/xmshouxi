@@ -15,7 +15,7 @@ import {
   startLogisticsSalesPreview,
 } from '@/services/api';
 
-interface Props { department: string; compact?: boolean; }
+interface Props { department: string; compact?: boolean; onSelectAigc?: () => void; aigcActive?: boolean; }
 type WorkflowPhase = 'idle' | 'previewing' | 'executing' | 'exporting';
 type WarningGroupCode = 'duplicate_identity' | 'product_not_found' | 'dimension_validation' | 'platform_scope_limited' | 'other';
 
@@ -87,7 +87,7 @@ function ToolSummary({ phase, job, preview, result, exportResult, error }: { pha
   return <span className="text-[9px] text-white/25">60 天销量同步 · AJ:AM</span>;
 }
 
-export default function WorkflowToolbar({ department, compact = false }: Props) {
+export default function WorkflowToolbar({ department, compact = false, onSelectAigc, aigcActive = false }: Props) {
   const [phase, setPhase] = useState<WorkflowPhase>('idle');
   const [preview, setPreview] = useState<LogisticsWorkflowPreview | null>(null);
   const [job, setJob] = useState<LogisticsWorkflowJob | null>(null);
@@ -101,6 +101,7 @@ export default function WorkflowToolbar({ department, compact = false }: Props) 
   const resizing = useRef(false);
   const busy = phase !== 'idle';
   const canShowTool = department === 'logistics';
+  const canShowAigcTool = department === 'ads';
   const maxPanelWidth = typeof window === 'undefined' ? MAX_PANEL_WIDTH : Math.min(MAX_PANEL_WIDTH, Math.max(420, Math.round(window.innerWidth * 0.45)));
 
   useEffect(() => { const stored = Number(window.localStorage.getItem('department-tools-width')); if (Number.isFinite(stored)) setPanelWidth(Math.min(maxPanelWidth, Math.max(MIN_PANEL_WIDTH, stored))); }, [maxPanelWidth]);
@@ -148,6 +149,14 @@ export default function WorkflowToolbar({ department, compact = false }: Props) 
   }
 
   function ToolCard({ drawer = false }: { drawer?: boolean }) {
+    if (canShowAigcTool) return <div className={`rounded-2xl border ${aigcActive ? 'border-[#9cddc8] bg-[#f1fcf8]' : 'border-[#dfeee8] bg-white'} ${drawer ? 'p-4' : 'p-3'}`}>
+      <button type="button" onClick={() => { onSelectAigc?.(); setMobileOpen(false); }} className="flex w-full items-center gap-3 text-left">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#bce9da] bg-[#e8f8f2] text-[#087b61]">✦</div>
+        <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-[11px] font-bold text-[#202632]">AIGC 视频提示词</span><span className="rounded-full bg-[#e8f8f2] px-2 py-1 text-[9px] font-bold text-[#087b61]">视觉生成</span></div><div className="mt-1 text-[10px] leading-4 text-[#687383]">上传商品图，生成可直接使用的 Seedance 视频提示词</div></div>
+        <span className="shrink-0 text-sm text-[#087b61]">→</span>
+      </button>
+      {aigcActive && <div className="mt-3 rounded-xl border border-[#ccefe2] bg-white px-3 py-2 text-[10px] leading-4 text-[#087b61]">提示词生成模式已开启，聊天框下方可以上传商品图。</div>}
+    </div>;
     if (!canShowTool) return <div className="flex h-full items-center justify-center text-center"><div><div className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl border border-white/[0.07] bg-white/[0.025] text-white/20">＋</div><p className="mt-3 text-[11px] text-white/30">暂无已配置工具</p></div></div>;
     return <div className={`rounded-2xl border border-white/[0.08] bg-white/[0.025] ${drawer ? 'p-4' : 'p-3'}`}>
       <button type="button" onClick={() => setExpanded((current) => !current)} className="flex w-full items-center gap-3 text-left" aria-expanded={expanded}><div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-cyan-200/15 bg-cyan-300/[0.07] text-cyan-100"><svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 7h11v10H4V7Zm11 3h3l2 3v4h-5v-7ZM7 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm10 0a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" /></svg></div><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-[11px] font-medium text-white/85">备货逻辑看板 · 销量导出</span><StatusBadge phase={phase} job={job} preview={preview} result={result} exportResult={exportResult} error={error} /></div><div className="mt-1 flex min-w-0 items-center gap-2"><ToolSummary phase={phase} job={job} preview={preview} result={result} exportResult={exportResult} error={error} /></div></div><span className={`shrink-0 text-sm text-white/30 transition-transform ${expanded ? 'rotate-180' : ''}`}>⌄</span></button>
@@ -163,9 +172,10 @@ export default function WorkflowToolbar({ department, compact = false }: Props) 
   }
 
   if (compact) {
-    if (!canShowTool) return null;
+    if (!canShowTool && !canShowAigcTool) return null;
+    if (canShowAigcTool) return <div className="workflow-light relative z-30"><button type="button" onClick={() => setMobileOpen(true)} className="flex w-full items-center gap-2 rounded-xl border border-[#dfeee8] bg-white px-3 py-2 text-left"><span className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#e8f8f2] text-[#087b61]">✦</span><span className="min-w-0 flex-1"><span className="block text-[10px] font-bold text-[#202632]">AIGC 视频提示词</span><span className="mt-0.5 block truncate text-[9px] text-[#687383]">{aigcActive ? '提示词生成模式已开启' : '上传商品图并生成 Seedance 提示词'}</span></span><span className="text-[10px] text-[#087b61]">→</span></button>{mobileOpen && <><button type="button" aria-label="关闭工具栏" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm" /><div className="workflow-light fixed inset-x-3 bottom-3 top-20 z-50 overflow-y-auto rounded-2xl border border-[#e1e7ed] bg-white/95 p-3 shadow-2xl backdrop-blur-2xl"><div className="mb-3 flex items-center justify-between px-1"><div className="text-xs font-bold text-[#202632]">工具库</div><button type="button" onClick={() => setMobileOpen(false)} className="rounded-lg px-2 py-1 text-sm text-[#687383] hover:bg-[#f4f6f8]">×</button></div><ToolCard drawer /></div></>}</div>;
     return <div className="workflow-light relative z-30"><button type="button" onClick={() => setMobileOpen(true)} className="flex w-full items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 py-2 text-left"><span className="flex h-6 w-6 items-center justify-center rounded-lg bg-cyan-300/[0.08] text-cyan-100">↗</span><span className="min-w-0 flex-1"><span className="block text-[10px] font-medium text-white/70">工具库</span><span className="mt-0.5 block truncate text-[9px] text-white/30">{preview ? `销量同步待确认 · ${preview.matched_rows} 行` : phase === 'previewing' || phase === 'exporting' ? `销量同步运行中 · ${job?.progress || 0}%` : result ? `销量同步已完成 · ${result.updated_rows} 行` : exportResult ? `Excel 已生成 · ${exportResult.matched_rows} 行，可下载` : '销量同步 · 点击打开工具栏'}</span></span><span className="text-[10px] text-white/30">→</span></button>{mobileOpen && <><button type="button" aria-label="关闭工具栏" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm" /><div className="workflow-light fixed inset-x-3 bottom-3 top-20 z-50 overflow-y-auto rounded-2xl border border-white/[0.1] bg-white/95 p-3 shadow-2xl backdrop-blur-2xl"><div className="mb-3 flex items-center justify-between px-1"><div className="text-xs font-medium text-white/75">工具库</div><button type="button" onClick={() => setMobileOpen(false)} className="rounded-lg px-2 py-1 text-sm text-white/35 hover:bg-white/[0.06] hover:text-white/70">×</button></div><ToolCard drawer /></div></>}</div>;
   }
 
-  return <aside className="workflow-light relative hidden min-w-0 shrink-0 flex-col rounded-2xl xl:flex" style={{ width: panelWidth }}><div role="separator" aria-label="拖动调整工具栏宽度" onPointerDown={beginResize} onDoubleClick={resetWidth} className="group absolute -left-1.5 inset-y-0 z-10 flex w-3 cursor-col-resize items-center justify-center"><span className="h-10 w-0.5 rounded-full bg-white/10 transition group-hover:h-16 group-hover:bg-emerald-200/60" /></div><div className="flex items-center justify-between border-b border-white/[0.07] px-4 py-4"><div className="flex items-center gap-2 text-xs font-medium text-white/80"><svg className="h-4 w-4 text-emerald-200/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M12 3v4m0 10v4M3 12h4m10 0h4M5.6 5.6l2.8 2.8m7.2 7.2 2.8 2.8m0-12.8-2.8 2.8m-7.2 7.2-2.8 2.8" strokeLinecap="round" /></svg>工具库</div><span className="rounded-full bg-white/[0.05] px-2 py-1 text-[9px] text-white/30">{busy ? '1 个运行中' : '1 个可用'}</span></div><div className="flex-1 overflow-y-auto p-3"><ToolCard /></div><div className="border-t border-white/[0.07] px-4 py-3 text-[9px] leading-4 text-white/20">可拖动左侧边缘调整宽度 · 双击恢复默认。现在仅生成临时 Excel 下载，不写入服务器路径。</div></aside>;
+  return <aside className="workflow-light relative hidden min-w-0 shrink-0 flex-col rounded-2xl xl:flex" style={{ width: panelWidth }}><div role="separator" aria-label="拖动调整工具栏宽度" onPointerDown={beginResize} onDoubleClick={resetWidth} className="group absolute -left-1.5 inset-y-0 z-10 flex w-3 cursor-col-resize items-center justify-center"><span className="h-10 w-0.5 rounded-full bg-white/10 transition group-hover:h-16 group-hover:bg-emerald-200/60" /></div><div className="flex items-center justify-between border-b border-white/[0.07] px-4 py-4"><div className="flex items-center gap-2 text-xs font-medium text-white/80"><svg className="h-4 w-4 text-emerald-200/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M12 3v4m0 10v4M3 12h4m10 0h4M5.6 5.6l2.8 2.8m7.2 7.2 2.8 2.8m0-12.8-2.8 2.8m-7.2 7.2-2.8 2.8" strokeLinecap="round" /></svg>工具库</div><span className="rounded-full bg-white/[0.05] px-2 py-1 text-[9px] text-white/30">{busy ? '1 个运行中' : canShowAigcTool ? '1 个可用' : '1 个可用'}</span></div><div className="flex-1 overflow-y-auto p-3"><ToolCard /></div><div className="border-t border-white/[0.07] px-4 py-3 text-[9px] leading-4 text-white/20">可拖动左侧边缘调整宽度 · 双击恢复默认。工具任务结果会保存在当前聊天记录中。</div></aside>;
 }

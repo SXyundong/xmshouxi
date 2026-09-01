@@ -97,3 +97,4 @@ class LLMClient:
 
 # 全局单例，Agent 默认使用该实例
 llm_client = LLMClient()
+vision_llm_client = LLMClient(model=settings.LLM_VISION_MODEL)

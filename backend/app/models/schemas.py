@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -37,6 +39,7 @@ class ConversationMessageResponse(BaseModel):
     content: str
     status: str
     created_at: str
+    metadata: dict[str, Any] | None = None
 
 
 class ConversationDetailResponse(ConversationResponse):

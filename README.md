@@ -53,6 +53,7 @@ ecommerce-agent-v1/
 - **Tool 框架**：所有 Tool 继承 `BaseTool`，通过 `ToolRegistry` 按名称注册/获取，与 Agent 解耦。
 - **Mock 领星 Tool**：`lingxing_sales` 当前返回 mock 数据，未来替换为真实领星 API 即可。
 - **LLM Client**：统一入口 `LLMClient.chat()`，默认使用 DeepSeek OpenAI 兼容接口。Agent 不直接调用模型供应商。
+- **广告 AIGC 提示词**：广告部门工具库中的“AIGC 视频提示词”使用 `LLM_VISION_MODEL` 理解商品图，并依据内置 Seedance 中文提示词规则生成可复制的分镜提示词；图片只在本次请求中处理，提示词和聊天记录会保存。
 - **基础日志**：使用 `uvicorn` 标准访问日志；业务侧通过 Python `logging` 扩展。
 
 ## 环境变量
@@ -64,7 +65,11 @@ ecommerce-agent-v1/
 | `LLM_API_KEY` | 是（生产） | 空 | DeepSeek API Key，仅配置在 Railway 后端 |
 | `LLM_BASE_URL` | 否 | `https://api.deepseek.com` | 兼容 OpenAI Chat Completions 的地址 |
 | `LLM_MODEL` | 否 | `deepseek-v4-flash` | 默认模型 |
+| `LLM_VISION_MODEL` | 否 | `deepseek-v4-flash-vision-exp` | 广告部门商品图理解模型 |
 | `LLM_MOCK_ENABLED` | 否 | `false` | 仅本地演示时显式打开模拟回复 |
+| `AIGC_MAX_IMAGE_COUNT` | 否 | `9` | 广告部门 AIGC 一次最多上传图片数 |
+| `AIGC_MAX_IMAGE_BYTES` | 否 | `10485760` | 单张商品图最大字节数 |
+| `AIGC_MAX_TOTAL_IMAGE_BYTES` | 否 | `31457280` | 一次请求商品图最大总字节数 |
 | `FEISHU_SSO_REQUIRED` | 否 | `true` | 是否要求飞书身份登录 |
 | `WORKFLOW_AUTH_URL` | 是（生产） | 飞书工作流服务地址 | Agent 单点登录入口 |
 | `AGENT_SSO_SHARED_SECRET` | 是（生产） | 空 | 两个 Railway 服务之间的共享服务密钥 |

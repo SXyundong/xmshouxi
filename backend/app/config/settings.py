@@ -19,9 +19,13 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek").strip().lower()
 LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("DEEPSEEK_API_KEY", os.getenv("OPENAI_API_KEY", ""))).strip()
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")).strip()
 LLM_MODEL = os.getenv("LLM_MODEL", os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")).strip()
+LLM_VISION_MODEL = os.getenv("LLM_VISION_MODEL", "deepseek-v4-flash-vision-exp").strip()
 LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "90"))
 LLM_MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "4096"))
 LLM_MOCK_ENABLED = os.getenv("LLM_MOCK_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+AIGC_MAX_IMAGE_COUNT = int(os.getenv("AIGC_MAX_IMAGE_COUNT", "9"))
+AIGC_MAX_IMAGE_BYTES = int(os.getenv("AIGC_MAX_IMAGE_BYTES", str(10 * 1024 * 1024)))
+AIGC_MAX_TOTAL_IMAGE_BYTES = int(os.getenv("AIGC_MAX_TOTAL_IMAGE_BYTES", str(30 * 1024 * 1024)))
 FEISHU_SSO_REQUIRED = os.getenv("FEISHU_SSO_REQUIRED", "true").lower() in {"1", "true", "yes", "on"}
 WORKFLOW_AUTH_URL = os.getenv(
     "WORKFLOW_AUTH_URL", "https://ergolife-feishu-workflow-production.up.railway.app"

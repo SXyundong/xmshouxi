@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from app.core.auth import AuthError, current_identity, exchange_sso_ticket, sign_session, workflow_login_url
@@ -16,6 +16,7 @@ from app.models.schemas import (
     CurrentUserResponse,
 )
 from app.services.chat_service import ChatServiceError, chat_service
+from app.services.aigc_service import AIGCServiceError, aigc_service
 
 router = APIRouter()
 
@@ -37,6 +38,7 @@ def _message_response(item) -> dict:
         "content": item.content,
         "status": item.status,
         "created_at": item.created_at.isoformat() if item.created_at else "",
+        "metadata": item.metadata_json,
     }
 
 
@@ -117,6 +119,34 @@ async def send_conversation_message(request: Request, conversation_id: uuid.UUID
     return {
         "conversation": _conversation_response(result["conversation"]),
         "agent": result["agent"],
+        "user_message": _message_response(result["user"]),
+        "assistant_message": _message_response(result["assistant"]),
+    }
+
+
+@router.post("/api/conversations/{conversation_id}/aigc/video-prompt")
+async def generate_aigc_video_prompt(
+    request: Request,
+    conversation_id: uuid.UUID,
+    brief: str = Form(default=""),
+    platform: str = Form(default="TikTok / 短视频"),
+    duration_seconds: str = Form(default="10"),
+    aspect_ratio: str = Form(default="9:16"),
+    style: str = Form(default=""),
+    files: list[UploadFile] = File(default=[]),
+) -> dict:
+    """Generate a Seedance prompt from product images in the ads department."""
+    identity = current_identity(request)
+    try:
+        result = await aigc_service.generate_video_prompt(
+            identity["open_id"], conversation_id, brief, platform, duration_seconds,
+            aspect_ratio, style, files,
+        )
+    except AIGCServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "conversation": _conversation_response(result["conversation"]),
+        "agent": "广告Agent",
         "user_message": _message_response(result["user"]),
         "assistant_message": _message_response(result["assistant"]),
     }

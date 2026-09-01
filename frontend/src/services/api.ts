@@ -24,6 +24,11 @@ export interface ConversationMessage {
   content: string;
   status: 'completed' | 'failed' | 'pending' | 'interrupted';
   created_at: string;
+  metadata?: {
+    mode?: string;
+    attachments?: Array<{ name: string; content_type: string; size: number; label?: string }>;
+    [key: string]: unknown;
+  } | null;
 }
 
 export interface ConversationDetail extends Conversation {
@@ -36,6 +41,8 @@ export interface ConversationTurnResponse {
   user_message: ConversationMessage;
   assistant_message: ConversationMessage;
 }
+
+export interface AigcVideoPromptResponse extends ConversationTurnResponse {}
 
 export interface LogisticsWorkflowWarning {
   level: 'warning';
@@ -161,6 +168,33 @@ export async function sendConversationMessage(id: string, message: string): Prom
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(body.detail || `发送失败：${res.status}`);
+  return body;
+}
+
+export async function generateAigcVideoPrompt(
+  id: string,
+  payload: {
+    files: File[];
+    brief: string;
+    platform: string;
+    durationSeconds: string;
+    aspectRatio: string;
+    style: string;
+  },
+): Promise<AigcVideoPromptResponse> {
+  const form = new FormData();
+  form.append('brief', payload.brief);
+  form.append('platform', payload.platform);
+  form.append('duration_seconds', payload.durationSeconds);
+  form.append('aspect_ratio', payload.aspectRatio);
+  form.append('style', payload.style);
+  payload.files.forEach((file) => form.append('files', file, file.name));
+  const res = await fetch(`/api/conversations/${encodeURIComponent(id)}/aigc/video-prompt`, {
+    method: 'POST',
+    body: form,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || `提示词生成失败：${res.status}`);
   return body;
 }
 
