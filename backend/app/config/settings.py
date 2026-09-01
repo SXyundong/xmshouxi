@@ -15,9 +15,25 @@ def _normalize_database_url(value: str) -> str:
         return "postgresql+psycopg://" + value[len("postgresql://") :]
     return value
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-MODEL = os.getenv("MODEL", "gpt-4o-mini")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek").strip().lower()
+LLM_API_KEY = os.getenv("LLM_API_KEY", os.getenv("DEEPSEEK_API_KEY", os.getenv("OPENAI_API_KEY", ""))).strip()
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")).strip()
+LLM_MODEL = os.getenv("LLM_MODEL", os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")).strip()
+LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "90"))
+LLM_MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "4096"))
+LLM_MOCK_ENABLED = os.getenv("LLM_MOCK_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+FEISHU_SSO_REQUIRED = os.getenv("FEISHU_SSO_REQUIRED", "true").lower() in {"1", "true", "yes", "on"}
+WORKFLOW_AUTH_URL = os.getenv(
+    "WORKFLOW_AUTH_URL", "https://ergolife-feishu-workflow-production.up.railway.app"
+).rstrip("/")
+AGENT_SSO_SHARED_SECRET = os.getenv("AGENT_SSO_SHARED_SECRET", "").strip()
+FEISHU_SESSION_SECRET = os.getenv("FEISHU_SESSION_SECRET", AGENT_SSO_SHARED_SECRET or "local-demo-session-secret")
+FEISHU_SESSION_MAX_AGE = int(os.getenv("FEISHU_SESSION_MAX_AGE", "28800"))
+
+# Backward-compatible aliases for local integrations that still import the old names.
+OPENAI_API_KEY = LLM_API_KEY
+OPENAI_BASE_URL = LLM_BASE_URL
+MODEL = LLM_MODEL
 DATABASE_URL = _normalize_database_url(
     os.getenv(
         "DATABASE_URL",

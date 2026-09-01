@@ -229,3 +229,53 @@ class InventoryPositionSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     product: Mapped[ProductMarketParameter] = relationship(back_populates="inventory_snapshots")
+
+
+class ChatConversation(Base):
+    __tablename__ = "chat_conversations"
+    __table_args__ = (
+        Index("ix_chat_conversations_owner_department", "owner_open_id", "department"),
+        Index("ix_chat_conversations_owner_updated", "owner_open_id", "updated_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_open_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    department: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False, default="新聊天", server_default="新聊天")
+    summary: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    messages: Mapped[list[ChatMessage]] = relationship(
+        back_populates="conversation", cascade="all, delete-orphan", order_by="ChatMessage.sequence_no"
+    )
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "sequence_no", name="uq_chat_messages_conversation_sequence"),
+        Index("ix_chat_messages_conversation_created", "conversation_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("chat_conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="completed", server_default="completed")
+    model: Mapped[str | None] = mapped_column(String(128))
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    total_tokens: Mapped[int | None] = mapped_column(Integer)
+    provider_request_id: Mapped[str | None] = mapped_column(String(255))
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    conversation: Mapped[ChatConversation] = relationship(back_populates="messages")

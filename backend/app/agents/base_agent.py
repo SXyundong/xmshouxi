@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from app.core.llm_client import llm_client
+from app.core.llm_client import LLMResult, llm_client
 from app.tools.registry import tool_registry
 
 
@@ -17,11 +17,17 @@ class BaseAgent:
     def __init__(self, llm=None):
         self.llm = llm or llm_client
 
-    async def run(self, message: str) -> str:
+    async def run(self, message: str, history: list[dict] | None = None) -> str:
         """执行 Agent：先调用工具收集数据，再交给 LLM 生成回答。"""
+        return (await self.run_with_result(message, history)).content
+
+    async def run_with_result(self, message: str, history: list[dict] | None = None) -> LLMResult:
         tool_results = await self._run_tools(message)
-        messages = self._build_messages(message, tool_results)
-        return await self.llm.chat(messages)
+        messages = self._build_messages(message, tool_results, history or [])
+        complete = getattr(self.llm, "complete", None)
+        if complete is not None:
+            return await complete(messages)
+        return LLMResult(content=await self.llm.chat(messages), model="unknown")
 
     async def _run_tools(self, message: str) -> str:
         if not self.tools:
@@ -37,7 +43,7 @@ class BaseAgent:
             lines.append(f"- {tool.name}: {result}")
         return "\n".join(lines)
 
-    def _build_messages(self, message: str, tool_results: str) -> list[dict]:
+    def _build_messages(self, message: str, tool_results: str, history: list[dict] | None = None) -> list[dict]:
         system_prompt = (
             f"你是{self.name}，服务于「{self.department}」部门。"
             f"职责：{self.description}。"
@@ -48,5 +54,10 @@ class BaseAgent:
             messages.append(
                 {"role": "system", "content": f"工具返回数据:\n{tool_results}"}
             )
+        messages.extend(
+            {"role": item["role"], "content": item["content"]}
+            for item in (history or [])
+            if item.get("role") in {"user", "assistant"} and item.get("content")
+        )
         messages.append({"role": "user", "content": message})
         return messages

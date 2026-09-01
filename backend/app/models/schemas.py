@@ -11,6 +11,42 @@ class ChatResponse(BaseModel):
     answer: str
 
 
+class CurrentUserResponse(BaseModel):
+    open_id: str
+    display_name: str
+    department_names: list[str] = []
+    roles: list[str] = []
+
+
+class ConversationCreateRequest(BaseModel):
+    department: str
+    title: str = "新聊天"
+
+
+class ConversationResponse(BaseModel):
+    id: str
+    department: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class ConversationMessageResponse(BaseModel):
+    id: str
+    role: str
+    content: str
+    status: str
+    created_at: str
+
+
+class ConversationDetailResponse(ConversationResponse):
+    messages: list[ConversationMessageResponse] = []
+
+
+class ConversationMessageRequest(BaseModel):
+    message: str
+
+
 class LogisticsWorkflowWarning(BaseModel):
     level: str
     code: str

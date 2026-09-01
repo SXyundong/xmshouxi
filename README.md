@@ -48,11 +48,11 @@ ecommerce-agent-v1/
 
 ## 架构说明
 
-- **Agent 路由**：`POST /api/chat` 收到 `{department, message}` 后，由 `AgentEngine` 从 `AgentRegistry` 找到对应 Agent 并执行。
+- **Agent 路由**：会话接口按 `conversation_id` 路由到部门 Agent，历史消息从 PostgreSQL 加载并按员工身份隔离。
 - **BaseAgent**：统一负责接收用户输入、管理工具、调用 LLM、返回结果。所有 Agent 继承它，业务逻辑不写在 API 里。
 - **Tool 框架**：所有 Tool 继承 `BaseTool`，通过 `ToolRegistry` 按名称注册/获取，与 Agent 解耦。
 - **Mock 领星 Tool**：`lingxing_sales` 当前返回 mock 数据，未来替换为真实领星 API 即可。
-- **LLM Client**：统一入口 `LLMClient.chat()`，从 `.env` 读取 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `MODEL`。Agent 不直接调用 OpenAI。
+- **LLM Client**：统一入口 `LLMClient.chat()`，默认使用 DeepSeek OpenAI 兼容接口。Agent 不直接调用模型供应商。
 - **基础日志**：使用 `uvicorn` 标准访问日志；业务侧通过 Python `logging` 扩展。
 
 ## 环境变量
@@ -61,9 +61,13 @@ ecommerce-agent-v1/
 
 | 变量 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `OPENAI_API_KEY` | 否 | 空 | 不填时返回本地 mock 回复 |
-| `OPENAI_BASE_URL` | 否 | `https://api.openai.com/v1` | 兼容 OpenAI 协议的网关地址 |
-| `MODEL` | 否 | `gpt-4o-mini` | 模型名称 |
+| `LLM_API_KEY` | 是（生产） | 空 | DeepSeek API Key，仅配置在 Railway 后端 |
+| `LLM_BASE_URL` | 否 | `https://api.deepseek.com` | 兼容 OpenAI Chat Completions 的地址 |
+| `LLM_MODEL` | 否 | `deepseek-v4-flash` | 默认模型 |
+| `LLM_MOCK_ENABLED` | 否 | `false` | 仅本地演示时显式打开模拟回复 |
+| `FEISHU_SSO_REQUIRED` | 否 | `true` | 是否要求飞书身份登录 |
+| `WORKFLOW_AUTH_URL` | 是（生产） | 飞书工作流服务地址 | Agent 单点登录入口 |
+| `AGENT_SSO_SHARED_SECRET` | 是（生产） | 空 | 两个 Railway 服务之间的共享服务密钥 |
 
 前端（`frontend/.env`，仅本地开发用）：
 
@@ -78,8 +82,8 @@ ecommerce-agent-v1/
 ```bash
 cd ecommerce-agent-v1
 
-# 可选：配置 LLM（不配也能跑，返回 mock）
-cp .env.example .env   # 然后编辑 .env 填入 OPENAI_API_KEY
+# 配置 DeepSeek（本地如需演示回复，可将 LLM_MOCK_ENABLED 改为 true）
+cp .env.example .env   # 然后编辑 .env 填入 LLM_API_KEY
 
 # 构建并启动
 docker compose up --build -d
@@ -101,6 +105,33 @@ docker compose logs -f        # 查看日志
 docker compose restart        # 重启
 docker compose down           # 停止并删除容器
 docker compose down -v        # 停止并删除容器 + 数据卷
+```
+
+### PostgreSQL 基础参数库
+
+当前 Compose 会启动本地 PostgreSQL，并在后端容器启动时自动执行 Alembic 迁移。数据库默认连接信息来自根目录 `.env`：
+
+```dotenv
+POSTGRES_DB=ecommerce_agent
+POSTGRES_USER=ecommerce
+POSTGRES_PASSWORD=ecommerce
+DATABASE_URL=postgresql+psycopg://ecommerce:ecommerce@db:5432/ecommerce_agent
+```
+
+基础参数表的导入器只读读取 Excel，不会修改源文件。首次导入或更新时，在 `backend` 目录执行：
+
+```bash
+python -m scripts.import_product_parameters \
+  --source "\\\\192.168.12.158\\e\\供应链\\共享资料\\基础参数表.xlsx"
+```
+
+需要先只校验、不写库时，加上 `--validate-only`。导入器会按 `SKU + 国家市场 + MSKU` 去重，保留完全重复的第一条；三字段相同但其他字段冲突时会中止并报告。Excel 中的 `#N/A` 会导入为 NULL，原始单元格值保存在 `raw_payload` 中供追溯。
+
+迁移文件位于 `backend/alembic/versions/`，本地手动执行迁移：
+
+```bash
+cd backend
+alembic upgrade head
 ```
 
 ## 二、本地开发运行（不使用 Docker）
@@ -136,13 +167,12 @@ npm run dev
 
 ## API 示例
 
-`POST /api/chat`
+`POST /api/conversations/{conversation_id}/messages`
 
 请求：
 
 ```json
 {
-  "department": "sales",
   "message": "昨天销售怎么样"
 }
 ```
@@ -151,8 +181,10 @@ npm run dev
 
 ```json
 {
+  "conversation": { "id": "...", "department": "sales", "title": "昨天销售怎么样" },
   "agent": "销售分析Agent",
-  "answer": "..."
+  "user_message": { "role": "user", "content": "昨天销售怎么样" },
+  "assistant_message": { "role": "assistant", "content": "..." }
 }
 ```
 

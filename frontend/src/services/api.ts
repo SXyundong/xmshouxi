@@ -3,6 +3,40 @@ export interface ChatResponse {
   answer: string;
 }
 
+export interface CurrentUser {
+  open_id: string;
+  display_name: string;
+  department_names: string[];
+  roles: string[];
+}
+
+export interface Conversation {
+  id: string;
+  department: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'tool';
+  content: string;
+  status: 'completed' | 'failed' | 'pending' | 'interrupted';
+  created_at: string;
+}
+
+export interface ConversationDetail extends Conversation {
+  messages: ConversationMessage[];
+}
+
+export interface ConversationTurnResponse {
+  conversation: Conversation;
+  agent: string;
+  user_message: ConversationMessage;
+  assistant_message: ConversationMessage;
+}
+
 export interface LogisticsWorkflowWarning {
   level: 'warning';
   code: string;
@@ -87,6 +121,47 @@ export async function sendChat(
   }
 
   return res.json();
+}
+
+export async function getCurrentUser(): Promise<CurrentUser> {
+  const res = await fetch('/api/me', { cache: 'no-store' });
+  if (!res.ok) throw new Error(`身份验证失败：${res.status}`);
+  return res.json();
+}
+
+export async function listConversations(department?: string): Promise<Conversation[]> {
+  const query = department ? `?department=${encodeURIComponent(department)}` : '';
+  const res = await fetch(`/api/conversations${query}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`加载聊天列表失败：${res.status}`);
+  return res.json();
+}
+
+export async function createConversation(department: string): Promise<Conversation> {
+  const res = await fetch('/api/conversations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ department, title: '新聊天' }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || `创建聊天失败：${res.status}`);
+  return body;
+}
+
+export async function getConversation(id: string): Promise<ConversationDetail> {
+  const res = await fetch(`/api/conversations/${encodeURIComponent(id)}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`加载聊天失败：${res.status}`);
+  return res.json();
+}
+
+export async function sendConversationMessage(id: string, message: string): Promise<ConversationTurnResponse> {
+  const res = await fetch(`/api/conversations/${encodeURIComponent(id)}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || `发送失败：${res.status}`);
+  return body;
 }
 
 async function parseWorkflowResponse<T>(res: Response): Promise<T> {
