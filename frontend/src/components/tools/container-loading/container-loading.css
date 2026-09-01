@@ -15,6 +15,7 @@
 
 /* Keep the modal fixed while the long input form gets its own scroll area. */
 .container-loading-tool .workspace{height:0;overflow:hidden}
+.container-loading-tool{height:100%;min-height:0}
 .container-loading-tool .control-panel{height:100%;min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain}
 .container-loading-tool .main-stage{min-height:0;overflow:hidden}
 .container-loading-tool .run-button{position:sticky;bottom:0;z-index:3;margin-top:4px;box-shadow:0 -8px 16px rgba(7,16,30,.92),0 8px 24px rgba(35,116,236,.24)}
