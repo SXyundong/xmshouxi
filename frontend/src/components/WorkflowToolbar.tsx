@@ -39,7 +39,7 @@ function ContainerLoadingTool() {
           <div><div className="text-sm font-bold">三维装柜优化</div><div className="mt-0.5 text-[9px] text-[#7188a5]">物流部门 · 商品参数来自基础参数表</div></div>
           <button type="button" onClick={() => setOpen(false)} className="rounded-lg px-3 py-1.5 text-lg text-[#9db0ca] transition hover:bg-white/[0.08] hover:text-white">×</button>
         </div>
-        <div className="min-h-0 flex-1 overflow-hidden"><ContainerLoadingOptimizerPanel /></div>
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden overscroll-contain"><ContainerLoadingOptimizerPanel /></div>
       </div>
     </>}
   </>;
