@@ -1,5 +1,6 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   executeLogisticsSalesWorkflow,
@@ -14,6 +15,35 @@ import {
   getLogisticsSalesExportStatus,
   startLogisticsSalesPreview,
 } from '@/services/api';
+
+const ContainerLoadingOptimizerPanel = dynamic(
+  () => import('@/components/tools/container-loading/ContainerLoadingOptimizerPanel'),
+  { ssr: false, loading: () => <div className="flex h-full items-center justify-center bg-[#07101e] text-sm text-[#9db0ca]">正在加载三维装柜工具…</div> },
+);
+
+function ContainerLoadingTool() {
+  const [open, setOpen] = useState(false);
+
+  return <>
+    <div className="mt-3 rounded-2xl border border-cyan-200/15 bg-cyan-300/[0.045] p-3">
+      <button type="button" onClick={() => setOpen(true)} className="flex w-full items-center gap-3 text-left">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-cyan-200/15 bg-cyan-300/[0.08] text-cyan-100">▦</div>
+        <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-[11px] font-medium text-white/85">三维装柜优化</span><span className="rounded-full bg-cyan-300/[0.1] px-2 py-1 text-[9px] text-cyan-100/70">物流工具</span></div><div className="mt-1 text-[9px] leading-4 text-white/35">输入 SKU 或 MSKU，自动读取整箱参数并计算装柜方案</div></div>
+        <span className="shrink-0 text-sm text-cyan-100/60">→</span>
+      </button>
+    </div>
+    {open && <>
+      <button type="button" aria-label="关闭三维装柜优化" onClick={() => setOpen(false)} className="fixed inset-0 z-[70] bg-[#020812]/75 backdrop-blur-sm" />
+      <div role="dialog" aria-modal="true" aria-label="三维装柜优化" className="fixed inset-6 z-[80] flex min-w-[1180px] flex-col overflow-hidden rounded-2xl border border-[#294768] bg-[#07101e] shadow-2xl">
+        <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#203550] bg-[#0a1628] px-4 text-white">
+          <div><div className="text-sm font-bold">三维装柜优化</div><div className="mt-0.5 text-[9px] text-[#7188a5]">物流部门 · 商品参数来自基础参数表</div></div>
+          <button type="button" onClick={() => setOpen(false)} className="rounded-lg px-3 py-1.5 text-lg text-[#9db0ca] transition hover:bg-white/[0.08] hover:text-white">×</button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-hidden"><ContainerLoadingOptimizerPanel /></div>
+      </div>
+    </>}
+  </>;
+}
 
 interface Props { department: string; compact?: boolean; onSelectAigc?: () => void; aigcActive?: boolean; }
 type WorkflowPhase = 'idle' | 'previewing' | 'executing' | 'exporting';
@@ -173,9 +203,9 @@ export default function WorkflowToolbar({ department, compact = false, onSelectA
 
   if (compact) {
     if (!canShowTool && !canShowAigcTool) return null;
-    if (canShowAigcTool) return <div className="workflow-light relative z-30"><button type="button" onClick={() => setMobileOpen(true)} className="flex w-full items-center gap-2 rounded-xl border border-[#dfeee8] bg-white px-3 py-2 text-left"><span className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#e8f8f2] text-[#087b61]">✦</span><span className="min-w-0 flex-1"><span className="block text-[10px] font-bold text-[#202632]">AIGC 视频提示词</span><span className="mt-0.5 block truncate text-[9px] text-[#687383]">{aigcActive ? '提示词生成模式已开启' : '上传商品图并生成 Seedance 提示词'}</span></span><span className="text-[10px] text-[#087b61]">→</span></button>{mobileOpen && <><button type="button" aria-label="关闭工具栏" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm" /><div className="workflow-light fixed inset-x-3 bottom-3 top-20 z-50 overflow-y-auto rounded-2xl border border-[#e1e7ed] bg-white/95 p-3 shadow-2xl backdrop-blur-2xl"><div className="mb-3 flex items-center justify-between px-1"><div className="text-xs font-bold text-[#202632]">工具库</div><button type="button" onClick={() => setMobileOpen(false)} className="rounded-lg px-2 py-1 text-sm text-[#687383] hover:bg-[#f4f6f8]">×</button></div><ToolCard drawer /></div></>}</div>;
-    return <div className="workflow-light relative z-30"><button type="button" onClick={() => setMobileOpen(true)} className="flex w-full items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 py-2 text-left"><span className="flex h-6 w-6 items-center justify-center rounded-lg bg-cyan-300/[0.08] text-cyan-100">↗</span><span className="min-w-0 flex-1"><span className="block text-[10px] font-medium text-white/70">工具库</span><span className="mt-0.5 block truncate text-[9px] text-white/30">{preview ? `销量同步待确认 · ${preview.matched_rows} 行` : phase === 'previewing' || phase === 'exporting' ? `销量同步运行中 · ${job?.progress || 0}%` : result ? `销量同步已完成 · ${result.updated_rows} 行` : exportResult ? `Excel 已生成 · ${exportResult.matched_rows} 行，可下载` : '销量同步 · 点击打开工具栏'}</span></span><span className="text-[10px] text-white/30">→</span></button>{mobileOpen && <><button type="button" aria-label="关闭工具栏" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm" /><div className="workflow-light fixed inset-x-3 bottom-3 top-20 z-50 overflow-y-auto rounded-2xl border border-white/[0.1] bg-white/95 p-3 shadow-2xl backdrop-blur-2xl"><div className="mb-3 flex items-center justify-between px-1"><div className="text-xs font-medium text-white/75">工具库</div><button type="button" onClick={() => setMobileOpen(false)} className="rounded-lg px-2 py-1 text-sm text-white/35 hover:bg-white/[0.06] hover:text-white/70">×</button></div><ToolCard drawer /></div></>}</div>;
+    if (canShowAigcTool) return <div className="workflow-light relative z-30"><button type="button" onClick={() => setMobileOpen(true)} className="flex w-full items-center gap-2 rounded-xl border border-[#dfeee8] bg-white px-3 py-2 text-left"><span className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#e8f8f2] text-[#087b61]">✦</span><span className="min-w-0 flex-1"><span className="block text-[10px] font-bold text-[#202632]">AIGC 视频提示词</span><span className="mt-0.5 block truncate text-[9px] text-[#687383]">{aigcActive ? '提示词生成模式已开启' : '上传商品图并生成 Seedance 提示词'}</span></span><span className="text-[10px] text-[#087b61]">→</span></button>{mobileOpen && <><button type="button" aria-label="关闭工具栏" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm" /><div className="workflow-light fixed inset-x-3 bottom-3 top-20 z-50 overflow-y-auto rounded-2xl border border-[#e1e7ed] bg-white/95 p-3 shadow-2xl backdrop-blur-2xl"><div className="mb-3 flex items-center justify-between px-1"><div className="text-xs font-bold text-[#202632]">工具库</div><button type="button" onClick={() => setMobileOpen(false)} className="rounded-lg px-2 py-1 text-sm text-[#687383] hover:bg-[#f4f6f8]">×</button></div><ToolCard drawer />{canShowTool&&<ContainerLoadingTool />}</div></>}</div>;
+    return <div className="workflow-light relative z-30"><button type="button" onClick={() => setMobileOpen(true)} className="flex w-full items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 py-2 text-left"><span className="flex h-6 w-6 items-center justify-center rounded-lg bg-cyan-300/[0.08] text-cyan-100">↗</span><span className="min-w-0 flex-1"><span className="block text-[10px] font-medium text-white/70">工具库</span><span className="mt-0.5 block truncate text-[9px] text-white/30">{preview ? `销量同步待确认 · ${preview.matched_rows} 行` : phase === 'previewing' || phase === 'exporting' ? `销量同步运行中 · ${job?.progress || 0}%` : result ? `销量同步已完成 · ${result.updated_rows} 行` : exportResult ? `Excel 已生成 · ${exportResult.matched_rows} 行，可下载` : '销量同步 · 点击打开工具栏'}</span></span><span className="text-[10px] text-white/30">→</span></button>{mobileOpen && <><button type="button" aria-label="关闭工具栏" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm" /><div className="workflow-light fixed inset-x-3 bottom-3 top-20 z-50 overflow-y-auto rounded-2xl border border-white/[0.1] bg-white/95 p-3 shadow-2xl backdrop-blur-2xl"><div className="mb-3 flex items-center justify-between px-1"><div className="text-xs font-medium text-white/75">工具库</div><button type="button" onClick={() => setMobileOpen(false)} className="rounded-lg px-2 py-1 text-sm text-white/35 hover:bg-white/[0.06] hover:text-white/70">×</button></div><ToolCard drawer />{canShowTool&&<ContainerLoadingTool />}</div></>}</div>;
   }
 
-  return <aside className="workflow-light relative hidden min-w-0 shrink-0 flex-col rounded-2xl xl:flex" style={{ width: panelWidth }}><div role="separator" aria-label="拖动调整工具栏宽度" onPointerDown={beginResize} onDoubleClick={resetWidth} className="group absolute -left-1.5 inset-y-0 z-10 flex w-3 cursor-col-resize items-center justify-center"><span className="h-10 w-0.5 rounded-full bg-white/10 transition group-hover:h-16 group-hover:bg-emerald-200/60" /></div><div className="flex items-center justify-between border-b border-white/[0.07] px-4 py-4"><div className="flex items-center gap-2 text-xs font-medium text-white/80"><svg className="h-4 w-4 text-emerald-200/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M12 3v4m0 10v4M3 12h4m10 0h4M5.6 5.6l2.8 2.8m7.2 7.2 2.8 2.8m0-12.8-2.8 2.8m-7.2 7.2-2.8 2.8" strokeLinecap="round" /></svg>工具库</div><span className="rounded-full bg-white/[0.05] px-2 py-1 text-[9px] text-white/30">{busy ? '1 个运行中' : canShowAigcTool ? '1 个可用' : '1 个可用'}</span></div><div className="flex-1 overflow-y-auto p-3"><ToolCard /></div><div className="border-t border-white/[0.07] px-4 py-3 text-[9px] leading-4 text-white/20">可拖动左侧边缘调整宽度 · 双击恢复默认。工具任务结果会保存在当前聊天记录中。</div></aside>;
+  return <aside className="workflow-light relative hidden min-w-0 shrink-0 flex-col rounded-2xl xl:flex" style={{ width: panelWidth }}><div role="separator" aria-label="拖动调整工具栏宽度" onPointerDown={beginResize} onDoubleClick={resetWidth} className="group absolute -left-1.5 inset-y-0 z-10 flex w-3 cursor-col-resize items-center justify-center"><span className="h-10 w-0.5 rounded-full bg-white/10 transition group-hover:h-16 group-hover:bg-emerald-200/60" /></div><div className="flex items-center justify-between border-b border-white/[0.07] px-4 py-4"><div className="flex items-center gap-2 text-xs font-medium text-white/80"><svg className="h-4 w-4 text-emerald-200/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M12 3v4m0 10v4M3 12h4m10 0h4M5.6 5.6l2.8 2.8m7.2 7.2 2.8 2.8m0-12.8-2.8 2.8m-7.2 7.2-2.8 2.8" strokeLinecap="round" /></svg>工具库</div><span className="rounded-full bg-white/[0.05] px-2 py-1 text-[9px] text-white/30">{busy ? '1 个运行中' : canShowAigcTool ? '1 个可用' : '1 个可用'}</span></div><div className="flex-1 overflow-y-auto p-3"><ToolCard />{canShowTool&&<ContainerLoadingTool />}</div><div className="border-t border-white/[0.07] px-4 py-3 text-[9px] leading-4 text-white/20">可拖动左侧边缘调整宽度 · 双击恢复默认。工具任务结果会保存在当前聊天记录中。</div></aside>;
 }

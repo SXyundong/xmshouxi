@@ -4,8 +4,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.agents.registry import agent_registry
 from app.api.chat import router as chat_router
 from app.api.workflows import router as workflow_router
+from app.container_loading.api import router as container_loading_router
 
-app = FastAPI(title="电商多部门 Agent 系统", version="1.0.0")
+app = FastAPI(title="电商多部门 Agent 系统", version="1.1.0")
 
 # V1 简化：允许所有来源，避免前后端联调时的 CORS 问题
 app.add_middleware(
@@ -18,6 +19,7 @@ app.add_middleware(
 
 app.include_router(chat_router)
 app.include_router(workflow_router)
+app.include_router(container_loading_router)
 
 
 @app.get("/")

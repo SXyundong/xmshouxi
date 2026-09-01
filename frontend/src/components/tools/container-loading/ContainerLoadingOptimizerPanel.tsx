@@ -1,0 +1,96 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Canvas, ThreeEvent, useThree } from '@react-three/fiber';
+import { Edges, OrbitControls } from '@react-three/drei';
+import * as THREE from 'three';
+
+type SkuRow = {productId:string;solverSku:string;sku:string;msku:string|null;productName:string|null;country:string;store:string|null;l:number;w:number;h:number;weight:number;min:number;max:number;step:number;stage:number;color:string};
+type ProductCandidate = {id:string;sku:string;msku:string|null;product_name:string|null;country:string;store:string|null;carton_length_cm:number|null;carton_width_cm:number|null;carton_height_cm:number|null;carton_weight_kg:number|null;parameters_complete:boolean};
+type LoadingJob = {status:'queued'|'running'|'complete'|'failed';job_id:string;progress:number;message:string;error:string;results:Record<string,any>|null};
+const initialItems: SkuRow[] = [];
+const modeInfo:any = {
+  THEORETICAL_MAX:{title:'上帝视角极限',tag:'GOD VIEW',desc:'不考虑进入路径和装载顺序，只验证最终三维几何。'},
+  SEQUENCE_REALISTIC_MAX:{title:'顺序可执行极限',tag:'SEQUENCE',desc:'按阶段冻结，后续货物必须从柜门沿 X 轴真实可达。'},
+};
+
+function InstancedBoxes({placements,color,onSelect,dimmed}:{placements:any[];color:string;onSelect:(p:any)=>void;dimmed:boolean}){
+  const ref=useRef<THREE.InstancedMesh>(null); const dummy=useMemo(()=>new THREE.Object3D(),[]);
+  useEffect(()=>{if(!ref.current)return; placements.forEach((p,index)=>{const visualSeparator=.002;dummy.position.set((p.x+p.length/2)/1000,(p.z+p.height/2)/1000,(p.y+p.width/2)/1000);dummy.scale.set(Math.max(.005,p.length/1000-visualSeparator),Math.max(.005,p.height/1000-visualSeparator),Math.max(.005,p.width/1000-visualSeparator));dummy.updateMatrix();ref.current!.setMatrixAt(index,dummy.matrix)});ref.current.instanceMatrix.needsUpdate=true},[placements,dummy]);
+  return <instancedMesh ref={ref} args={[undefined,undefined,placements.length]} renderOrder={dimmed?0:1} onClick={(e:ThreeEvent<MouseEvent>)=>{e.stopPropagation();if(e.instanceId!==undefined)onSelect(placements[e.instanceId])}}><boxGeometry args={[1,1,1]}/><meshStandardMaterial color={dimmed?'#64748b':color} roughness={.7} transparent={dimmed} opacity={dimmed?.028:1} depthWrite={!dimmed} emissive={dimmed?'#000000':color} emissiveIntensity={dimmed?0:.08}/></instancedMesh>
+}
+function CameraPreset({view,controls}:{view:string;controls:React.RefObject<any>}){const{camera}=useThree();useEffect(()=>{const positions:Record<string,[number,number,number]>={perspective:[14,7.5,9],top:[6,15,1.15],side:[6,2.8,12],door:[15,2.5,1.15],head:[-3,2.5,1.15]};camera.position.set(...positions[view]);camera.up.set(0,1,0);controls.current?.target.set(6,1.3,1.15);controls.current?.update()},[view,camera,controls]);return null}
+function Scene({solution,items,view,onSelect,focusSku}:{solution:any;items:SkuRow[];view:string;onSelect:(p:any)=>void;focusSku:string|null}){const controls=useRef<any>(null);return <Canvas camera={{position:[14,7.5,9],fov:42}} onPointerMissed={()=>onSelect(null)}><color attach="background" args={['#09111f']}/><ambientLight intensity={1.35}/><directionalLight position={[8,12,5]} intensity={2}/><gridHelper args={[16,32,'#314158','#17243a']} position={[6,0,1.18]}/><mesh position={[6.016,1.345,1.176]} raycast={()=>null}><boxGeometry args={[12.032,2.69,2.352]}/><meshBasicMaterial transparent opacity={0} depthWrite={false}/><Edges color="#9db0ca"/></mesh>{items.map(item=>{const p=solution?.placements?.filter((x:any)=>x.sku===item.solverSku)||[];return p.length>0&&<InstancedBoxes key={item.productId} placements={p} color={item.color} dimmed={focusSku!==null&&focusSku!==item.solverSku} onSelect={onSelect}/>})}<OrbitControls ref={controls} target={[6,1.3,1.15]}/><CameraPreset view={view} controls={controls}/></Canvas>}
+
+export default function ContainerLoadingOptimizerPanel(){
+
+  const [items,setItems]=useState(initialItems); const [activeMode,setActiveMode]=useState('THEORETICAL_MAX');
+  const [results,setResults]=useState<Record<string,any>>({}); const [solutionIndex,setSolutionIndex]=useState(0);
+  const [busy,setBusy]=useState(false); const [error,setError]=useState(''); const [selected,setSelected]=useState<any>(null); const [jobProgress,setJobProgress]=useState(0); const [jobMessage,setJobMessage]=useState('');
+  const [identifier,setIdentifier]=useState(''); const [candidates,setCandidates]=useState<ProductCandidate[]>([]); const [lookupBusy,setLookupBusy]=useState(false); const [lookupError,setLookupError]=useState('');
+  const [view,setView]=useState('perspective'); const [panel,setPanel]=useState('sku'); const [clearance,setClearance]=useState(0); const [focusSku,setFocusSku]=useState<string|null>(null);
+  const root=results[activeMode]; const solutions=root?[root,...(root.alternatives||[])]:[]; const solution=solutions[solutionIndex]||root;
+  const theoretical=results.THEORETICAL_MAX?.loaded_cbm; const realistic=results.SEQUENCE_REALISTIC_MAX?.loaded_cbm;
+  const realityGap=theoretical!=null&&realistic!=null?theoretical-realistic:null;
+  function edit(index:number,key:keyof SkuRow,value:string){
+    setResults({});setSelected(null);setFocusSku(null);
+    setItems(rows=>rows.map((row,i)=>i===index?{...row,[key]:key==='sku'||key==='color'||key==='productId'||key==='solverSku'||key==='msku'||key==='productName'||key==='country'||key==='store'?value:Number(value)}:row));
+  }
+  async function lookupProducts(){
+    const value=identifier.trim(); if(!value||lookupBusy)return;
+    setLookupBusy(true);setLookupError('');setCandidates([]);
+    try{const response=await fetch(`/api/tools/logistics/container-loading/products?identifier=${encodeURIComponent(value)}`,{cache:'no-store'});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.detail||`商品查询失败：HTTP ${response.status}`);setCandidates(data.candidates||[]);if(!(data.candidates||[]).length)setLookupError('没有找到匹配的 SKU 或 MSKU');}
+    catch(e:any){setLookupError(e.message||'商品查询失败')}finally{setLookupBusy(false)}
+  }
+  function addProduct(candidate:ProductCandidate){
+    if(!candidate.parameters_complete)return;
+    if(items.some(item=>item.productId===candidate.id)){setLookupError('该商品已经添加');return;}
+    const next=items.length+1; const dimensions=[candidate.carton_length_cm,candidate.carton_width_cm,candidate.carton_height_cm,candidate.carton_weight_kg];
+    setResults({});setSelected(null);setFocusSku(null);setLookupError('');
+    setItems(rows=>[...rows,{productId:candidate.id,solverSku:`PRODUCT::${candidate.id}`,sku:candidate.sku,msku:candidate.msku,productName:candidate.product_name,country:candidate.country,store:candidate.store,l:dimensions[0] as number,w:dimensions[1] as number,h:dimensions[2] as number,weight:dimensions[3] as number,min:0,max:500,step:1,stage:Math.max(1,...rows.map(row=>row.stage)),color:`hsl(${(next*83)%360} 75% 62%)`}]);setCandidates([]);setIdentifier('');
+  }
+  function removeSku(index:number){setResults({});setSelected(null);setFocusSku(null);setItems(rows=>rows.filter((_,i)=>i!==index))}
+  async function runBoth(){
+    if(!items.length){setError('请先添加至少一个商品');return}
+    setBusy(true);setError('');setSelected(null);setFocusSku(null);setSolutionIndex(0);setJobProgress(0);setJobMessage('正在提交装柜任务…');
+    try{
+      const response=await fetch('/api/tools/logistics/container-loading/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({container:{clearance_mm:clearance},items:items.map(item=>({product_market_parameter_id:item.productId,min_quantity:item.min,max_quantity:item.max,quantity_step:item.step,loading_stage:item.stage}))})});
+      const initial:LoadingJob=await response.json().catch(()=>({} as LoadingJob));if(!response.ok)throw new Error((initial as any).detail||`任务提交失败：HTTP ${response.status}`);
+      let current=initial;setJobProgress(current.progress);setJobMessage(current.message);
+      while(current.status!=='complete'&&current.status!=='failed'){await new Promise(resolve=>setTimeout(resolve,1800));const statusResponse=await fetch(`/api/tools/logistics/container-loading/jobs/${current.job_id}`,{cache:'no-store'});current=await statusResponse.json();if(!statusResponse.ok)throw new Error((current as any).detail||`任务查询失败：HTTP ${statusResponse.status}`);setJobProgress(current.progress);setJobMessage(current.message)}
+      if(current.status==='failed')throw new Error(current.error||'装柜方案计算失败');
+      setResults(current.results||{});setJobProgress(100);setJobMessage('装柜方案计算完成');
+    }catch(e:any){setError(e.message||'装柜方案计算失败')}finally{setBusy(false)}
+  }
+  useEffect(()=>{setSolutionIndex(0);setSelected(null);setFocusSku(null)},[activeMode]);
+  const valid=solution?.validation?.valid;
+  return <div className="container-loading-tool"><div className="app-shell">
+    <header><div><span className="eyebrow">40HQ · MULTI-SKU 3D OPTIMIZER</span><h1>智能三维装柜优化系统</h1></div><div className="header-status"><span className="live-dot"/>V0.3 · Editable SKU + Clearance</div></header>
+    <div className="workspace">
+      <aside className="control-panel">
+        <section><div className="section-title"><span>01</span>优化模式</div>{Object.keys(modeInfo).map(mode=><button key={mode} className={`mode-card ${activeMode===mode?'active':''}`} onClick={()=>setActiveMode(mode)}><b>{modeInfo[mode].title}<em>{modeInfo[mode].tag}</em></b><small>{modeInfo[mode].desc}</small></button>)}</section>
+        <section><div className="section-title"><span>02</span>添加商品</div><div className="product-search"><input value={identifier} onChange={e=>setIdentifier(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')void lookupProducts()}} placeholder="输入 SKU 或 MSKU" aria-label="输入 SKU 或 MSKU"/><button className="add-sku" onClick={()=>void lookupProducts()} disabled={lookupBusy}>{lookupBusy?'查询中…':'查询并添加'}</button></div>{lookupError&&<p className="lookup-error">{lookupError}</p>}{candidates.length>0&&<div className="product-candidates">{candidates.map(candidate=><button type="button" className="product-candidate" key={candidate.id} onClick={()=>addProduct(candidate)} disabled={!candidate.parameters_complete}><span className="product-candidate-main"><b>{candidate.sku}</b>{candidate.msku&&<span>MSKU {candidate.msku}</span>}<small>{candidate.product_name||'未填写品名'} · {candidate.country}{candidate.store?` · ${candidate.store}`:''}</small></span><span className="product-candidate-dimensions">{candidate.parameters_complete?`${candidate.carton_length_cm} × ${candidate.carton_width_cm} × ${candidate.carton_height_cm} cm · ${candidate.carton_weight_kg} kg`:'整箱参数不完整'}</span></button>)}</div>}<p className="hint">商品箱规和重量来自基础参数表；每行只需设置最低整箱数、最高整箱数和装载阶段。</p><div className="sku-editor">{items.map((item,index)=><div className="sku-edit-card" key={item.productId}><div className="sku-edit-title"><i style={{background:item.color}}/><span className="sku-product-title"><b>{item.sku}</b>{item.msku&&<small>MSKU {item.msku}</small>}</span><button className="remove-sku" aria-label={`删除 ${item.sku}`} onClick={()=>removeSku(index)}>×</button></div><div className="product-master-data"><span>{item.productName||'未填写品名'} · {item.country}{item.store?` · ${item.store}`:''}</span><b>{item.l} × {item.w} × {item.h} cm · {item.weight} kg</b></div><div className="sku-edit-fields"><label>最低整箱数 <input type="number" min="0" value={item.min} onChange={e=>edit(index,'min',e.target.value)}/></label><label>最高整箱数 <input type="number" min="0" value={item.max} onChange={e=>edit(index,'max',e.target.value)}/></label><label>装载阶段 <input type="number" min="1" value={item.stage} onChange={e=>edit(index,'stage',e.target.value)}/></label></div></div>)}</div></section>
+        <section><div className="section-title"><span>03</span>40HQ 参数</div><div className="container-spec"><div><small>长度</small><b>1203.2 cm</b></div><div><small>宽度</small><b>235.2 cm</b></div><div><small>高度</small><b>269 cm</b></div><div><small>业务目标</small><b>68 m³</b></div></div><label className="clearance-control">物理横向缝隙 <input type="number" min="0" max="100" step="1" value={clearance} onChange={e=>{setClearance(Math.max(0,Number(e.target.value)||0));setResults({});setSelected(null)}}/><span>mm</span></label><p className="hint clearance-hint">0 mm = 箱体可贴合；大于 0 时，X/Y 相邻箱体和 Block 内部都会保留该间隙，垂直堆叠仍允许接触支撑。</p></section>
+        <button className="run-button" disabled={busy||!items.length} onClick={runBoth}>{busy?<><span className="spinner"/> {jobMessage||'深度搜索中，可能需要几分钟…'} ({jobProgress}%)</>:'计算两个极限方案'}</button>{error&&<p className="error">{error}</p>}
+      </aside>
+      <main className="main-stage">
+        <div className="metric-row">
+          <div className="metric-card primary"><span>LOADED CBM</span><strong>{solution?solution.loaded_cbm.toFixed(3):'—'}</strong><small>m³</small></div>
+          <div className="metric-card"><span>PHYSICAL</span><strong>{solution?(solution.physical_utilization*100).toFixed(2):'—'}</strong><small>%</small></div>
+          <div className="metric-card"><span>OPERATIONAL</span><strong>{solution?(solution.operational_utilization*100).toFixed(2):'—'}</strong><small>%</small></div>
+          <div className="metric-card gap"><span>REALITY GAP</span><strong>{realityGap!=null?realityGap.toFixed(3):'—'}</strong><small>m³</small></div>
+          <div className={`metric-card status ${valid?'ok':''}`}><span>VALIDATION</span><strong>{solution?(valid?'PASS':'FAIL'):'—'}</strong><small>{solution?.solution_status||'等待求解'}</small></div>
+        </div>
+        <section className="viewer-card">
+          <div className="viewer-head"><div><b>{modeInfo[activeMode].title}</b><span>{solution?`${solution.loaded_boxes} boxes · ${solution.blocks.length} blocks · ${solution.solution_name}`:'等待生成方案'}</span></div><div className="view-buttons">{[['perspective','透视'],['top','顶视'],['side','侧视'],['head','柜头'],['door','柜门']].map(v=><button className={view===v[0]?'active':''} onClick={()=>setView(v[0])} key={v[0]}>{v[1]}</button>)}</div></div>
+          {solutions.length>0&&<div className="solution-strip">{solutions.map((candidate:any,index:number)=><button key={candidate.solution_id} className={solutionIndex===index?'active':''} onClick={()=>setSolutionIndex(index)}><b>{index+1}</b><span>{candidate.solution_name}</span><em>{candidate.loaded_cbm.toFixed(3)} m³</em></button>)}</div>}
+          <div className="canvas-wrap"><Scene solution={solution} items={items} view={view} focusSku={focusSku} onSelect={(placement:any)=>{setSelected(placement);if(placement)setFocusSku(placement.sku)}}/><div className="door-label">DOOR →</div>{!solution&&!busy&&<div className="empty-state"><b>准备进行真实三维混装</b><span>添加商品并设置最低、最高整箱数和阶段，然后计算两个极限</span></div>}{busy&&<div className="solver-progress"><b>{jobMessage||'正在计算装柜方案…'}</b><span>进度 {jobProgress}%</span></div>}<div className="color-legend">{items.map(i=><button className={focusSku===i.solverSku?'active':''} key={i.productId} onClick={()=>setFocusSku(focusSku===i.solverSku?null:i.solverSku)}><i style={{background:i.color}}/>{i.sku}</button>)}{focusSku&&<button className="show-all" onClick={()=>setFocusSku(null)}>显示全部</button>}</div>{focusSku&&<div className="focus-badge">聚焦 <b>{items.find(item=>item.solverSku===focusSku)?.sku||focusSku}</b><button onClick={()=>setFocusSku(null)}>×</button></div>}{selected&&<div className="selection-pop"><button onClick={()=>setSelected(null)}>×</button><b>{selected.box_id}</b><span>{items.find(item=>item.solverSku===selected.sku)?.sku||selected.sku} · Stage {selected.loading_stage} · O{selected.orientation}</span><span>XYZ {selected.x}, {selected.y}, {selected.z} mm</span><span>{selected.length} × {selected.width} × {selected.height} mm</span></div>}</div>
+        </section>
+        <section className="data-card"><div className="tabs"><button className={panel==='sku'?'active':''} onClick={()=>setPanel('sku')}>SKU 数量</button><button className={panel==='blocks'?'active':''} onClick={()=>setPanel('blocks')}>Block 列表</button><button className={panel==='sequence'?'active':''} onClick={()=>setPanel('sequence')}>装载顺序</button><button className={panel==='validation'?'active':''} onClick={()=>setPanel('validation')}>验证报告</button><div className="search-delta">Upper {solution?.upper_bound_cbm??'—'} m³ <b>Gap {solution?.optimality_gap_percent??'—'}%</b>{solution?.upper_bound_proven&&<em>· bound</em>}</div></div>
+          <div className="table-wrap">{panel==='sku'&&<table><thead><tr><th>SKU</th><th>箱规 (cm)</th><th>约束</th><th>阶段</th><th>最终箱数</th><th>货物体积</th></tr></thead><tbody>{items.map(i=>{const q=solution?.sku_quantities?.[i.solverSku]||0;return <tr className={focusSku===i.solverSku?'focus-row':''} key={i.productId} onClick={()=>setFocusSku(focusSku===i.solverSku?null:i.solverSku)}><td><i className="sku-dot" style={{background:i.color}}/>{i.sku}{i.msku&&<small className="table-subtitle">{i.msku}</small>}</td><td>{i.l} × {i.w} × {i.h}</td><td>{i.min}–{i.max}</td><td>{i.stage}</td><td><b>{solution?q:'—'}</b></td><td>{solution?(q*i.l*i.w*i.h/1e6).toFixed(3):'—'} m³</td></tr>})}</tbody></table>}
+          {panel==='blocks'&&<table><thead><tr><th>Block</th><th>Stage</th><th>SKU</th><th>阵列</th><th>箱数</th><th>XYZ (mm)</th><th>尺寸 (mm)</th></tr></thead><tbody>{solution?.blocks?.map((b:any)=><tr key={b.block_id}><td>{b.block_id}</td><td>{b.loading_stage}</td><td>{items.find(item=>item.solverSku===b.sku)?.sku||b.sku}</td><td>{b.nx} × {b.ny} × {b.nz}</td><td>{b.box_count}</td><td>{b.x}, {b.y}, {b.z}</td><td>{b.length} × {b.width} × {b.height}</td></tr>)||<tr><td colSpan={7}>暂无结果</td></tr>}</tbody></table>}
+          {panel==='sequence'&&<table><thead><tr><th>步骤</th><th>阶段</th><th>Block</th><th>SKU</th><th>箱数</th></tr></thead><tbody>{solution?.loading_sequence?.map((s:any)=><tr key={s.step}><td>{s.step}</td><td>{s.loading_stage}</td><td>{s.block_id}</td><td>{items.find(item=>item.solverSku===s.sku)?.sku||s.sku}</td><td>{s.box_count}</td></tr>)||<tr><td colSpan={5}>暂无结果</td></tr>}</tbody></table>}
+          {panel==='validation'&&<div className="validation-grid">{[['no_overlap','无碰撞'],['within_container','全部在柜内'],['supported','支撑约束'],['quantity_constraints','Min / Max'],['legal_orientations','合法方向'],['door_valid','门宽/门高'],['stack_limit_valid','堆叠层数'],['top_load_valid','顶部承重'],['fragile_valid','易碎约束'],['cross_sku_x_overlap','跨 SKU X 重叠'],['partial_cross_section_blocks','部分横截面'],['sequence_valid','顺序与可达'],['locally_maximal','局部不可再加']].map(v=><div key={v[0]} className={solution?.validation?.[v[0]]?'pass':''}><span>{solution?(solution.validation[v[0]]?'✓':'×'):'—'}</span><b>{v[1]}</b></div>)}</div>}</div>
+        </section>
+      </main>
+    </div>
+  </div></div>
+}
