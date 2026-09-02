@@ -125,6 +125,23 @@ class LogisticsSalesWorkflowTests(unittest.TestCase):
             {"list": [{"local_sku": "60003-2", "volume": 6}]},
         )
 
+    def test_unwraps_gateway_code_one_success_payload(self):
+        payload = {
+            "code": 1,
+            "success": True,
+            "msg": "操作成功",
+            "data": {
+                "code": 1,
+                "msg": None,
+                "trace_id": "trace-gateway",
+                "data": {"list": [{"seller_sku": "60003US05HXD", "volume": 6}]},
+            },
+        }
+        self.assertEqual(
+            self.workflow._validated_payload_data(payload),
+            {"list": [{"seller_sku": "60003US05HXD", "volume": 6}]},
+        )
+
     def test_duplicate_rows_receive_same_values_and_missing_row_is_untouched(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             target = Path(temp_dir) / "备货逻辑看板表-工作流测试.xlsx"

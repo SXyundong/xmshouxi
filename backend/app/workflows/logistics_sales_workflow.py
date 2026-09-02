@@ -659,7 +659,9 @@ class LogisticsSalesWorkflow:
     def _validated_payload_data(payload: Any) -> Any:
         if not isinstance(payload, dict):
             raise LogisticsWorkflowError("领星销售数据格式异常")
-        if payload.get("code") not in (None, 0):
+        # The LingXing gateway uses code=1 for a successful tool response,
+        # while direct/legacy responses use code=0.
+        if payload.get("code") not in (None, 0, 1):
             logger.warning(
                 "LingXing sales payload error: code=%r message=%r data=%s",
                 payload.get("code"),
