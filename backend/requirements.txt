@@ -10,3 +10,4 @@ alembic==1.14.0
 psycopg[binary]==3.2.3
 msoffcrypto-tool==6.0.0
 python-multipart==0.0.20
+ortools==9.15.6755

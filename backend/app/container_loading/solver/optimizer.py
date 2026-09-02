@@ -17,6 +17,7 @@ from .constraints import validate_solution
 from .lns import destroy_states
 from .maximal_spaces import spaces_after_blocks
 from .quantity_optimizer import legal_max_quantity, legal_min_quantity, quantity_is_valid, quantity_search_info, validate_quantity_plan
+from .stage_portfolio import staged_portfolio_search
 
 
 SUPPORTED_MODES = {"UNIFIED_STAGE_MAX", "THEORETICAL_MAX", "SEQUENCE_REALISTIC_MAX"}
@@ -78,7 +79,9 @@ def _partial_cross_section(blocks, container):
 
 
 def _result_from_state(state, container, items, mode, upper, min_support_ratio, started,
-                       solution_id, solution_name, seed_volume, locally_maximal, upper_bound_proven=True):
+                       solution_id, solution_name, seed_volume, locally_maximal,
+                       *, solution_status="BEST_FOUND", optimization_scope="pattern-portfolio",
+                       upper_bound_proven=False, auto_fill_upper_quantity=None, portfolio_candidates=0):
     # Keep the legacy mode labels for API/UI compatibility.  The first
     # version uses one staged, physically executable planning model for both.
     realistic = True
@@ -88,16 +91,22 @@ def _result_from_state(state, container, items, mode, upper, min_support_ratio, 
     validation["partial_cross_section_blocks"] = _partial_cross_section(blocks, container)
     validation.update(validate_accessibility(placements, container))
     validation["locally_maximal"] = locally_maximal
-    validation["valid"] = validation["valid"] and validation["sequence_valid"] and locally_maximal
+    # A timed optimisation may return a legal solution before it proves that
+    # no further carton can be added.  Local maximality is optimisation
+    # metadata, not a geometry validity condition.
+    validation["valid"] = validation["valid"] and validation["sequence_valid"]
 
     item_by_sku = {item.sku: item for item in items}
     loaded_cbm = sum(quantities[item.sku]*item.volume_m3 for item in items)
     gap = max(0.0, (upper-loaded_cbm)/upper*100) if upper else 0.0
-    status = "PROVEN_OPTIMAL" if gap <= 1e-9 else "BEST_FOUND"
+    auto_item = next((item for item in items if item.is_auto_fill), None)
+    auto_quantity = quantities.get(auto_item.sku, 0) if auto_item else None
+    auto_gap = (max(0, auto_fill_upper_quantity-auto_quantity)
+                if auto_fill_upper_quantity is not None and auto_quantity is not None else None)
     return OptimizationResult(
         solution_id=solution_id, solution_name=solution_name, mode=mode, mix_policy="FIXED_LAST_STAGE_AUTO",
         clearance_mm=getattr(container, "clearance_mm", 0.0),
-        solution_status=status, locally_maximal=locally_maximal, loaded_cbm=round(loaded_cbm, 6),
+        solution_status=solution_status, locally_maximal=locally_maximal, loaded_cbm=round(loaded_cbm, 6),
         physical_utilization=loaded_cbm/container.physical_cbm,
         operational_utilization=loaded_cbm/container.operational_target_cbm,
         total_weight_kg=round(sum(p.weight_kg for p in placements), 3), loaded_boxes=len(placements),
@@ -113,6 +122,10 @@ def _result_from_state(state, container, items, mode, upper, min_support_ratio, 
         ),
         upper_bound_cbm=round(upper, 6), upper_bound_proven=upper_bound_proven,
         optimality_gap_percent=round(gap, 3), validation=validation,
+        optimization_scope=optimization_scope,
+        auto_fill_upper_quantity=auto_fill_upper_quantity,
+        auto_fill_gap_boxes=auto_gap,
+        portfolio_candidates=portfolio_candidates,
         solve_time_seconds=round(time.perf_counter()-started, 4), initial_seed_cbm=round(seed_volume, 6),
         search_improvement_cbm=round(max(0.0, loaded_cbm-seed_volume), 6),
     )
@@ -187,63 +200,8 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
     cp_candidate, cp_upper, cp_proven = quantity_search_info(items, container)
     if not cp_candidate:
         raise ValueError("minimum quantities violate volume or payload constraints")
-    # The CP incumbent is one candidate, never a per-SKU search ceiling.
-    quantity_ceiling = {item.sku: legal_max_quantity(item, container) for item in items}
-    fixed_items = [item for item in items if not item.is_auto_fill]
-    auto_items = [item for item in items if item.is_auto_fill]
-    # Fixed cargo is solved as a separate first phase.  The auto-fill SKU is
-    # deliberately excluded from this phase so it cannot make the solver
-    # fragment a required SKU merely to gain a few more optional cartons.
-    search_items = fixed_items or items
-    search_quantity = {
-        item.sku: (item.max_quantity if item.max_quantity is not None
-                   else legal_max_quantity(item, container))
-        for item in search_items
-    }
     physical_upper = container.operational_target_cbm if container.operational_mode == "hard_limit" else container.physical_cbm
     upper = min(cp_upper, physical_upper)
-
-    block_defs = []
-    for item in search_items:
-        block_defs.extend(generate_blocks(item, container, int(options.get("max_blocks_per_sku", 100))))
-
-    candidates = []
-    # Do not seed the production search with the legacy equal-X-slab layout.
-    # That layout deliberately gives every SKU a long contiguous slice of the
-    # container and is exactly the unstable "long and narrow wall" pattern
-    # that the staged mixed-lane model is meant to avoid.  Keep the helper for
-    # backwards-compatible callers, but let EMS search build the first block.
-    candidates.extend(_ordered_state(state, search_items, container, realistic)
-                      for state in construct_single_sku_states(search_items, container))
-    seed_candidates = list(candidates)
-    seed_volume = max((state.volume for state in candidates if quantity_is_valid(state.counts, items, container)), default=0.0)
-
-    # Empty search discovers layouts without a seed. Seeded searches refine the
-    # residual spaces through the same fixed-quantity geometry rules.
-    empty_solutions = beam_pack_solutions(
-        search_items, search_quantity, container, block_defs, beam_width, max_placements,
-        min_support_ratio, None, mode, archive_limit=solution_limit*8, deadline=deadline,
-    )
-    candidates.extend(empty_solutions)
-    # Independent move validation is only needed during completion when
-    # advanced stacking fields are active; ordinary benchmark items use the
-    # faster geometric path and are independently validated afterwards.
-    advanced_stacking = any(item.stack_limit is not None or item.max_top_load_kg is not None or item.fragile
-                            for item in items)
-
-    def completion_move_valid(base_state, block, position):
-        if not advanced_stacking:
-            return True
-        x, y, z = position
-        trial = type(base_state)(
-            blocks=base_state.blocks+[(block, position)], counts=base_state.counts.copy(),
-            empty_spaces=base_state.empty_spaces, volume=base_state.volume+block["volume_m3"],
-            weight=base_state.weight+block["weight_kg"], stage_index=base_state.stage_index,
-        )
-        trial.counts[block["sku"]] = trial.counts.get(block["sku"], 0)+block["box_count"]
-        placements, _ = _expand_state(trial, items, container)
-        validation, _, _ = validate_solution(placements, container, items, mode, min_support_ratio)
-        return validation["valid"]
 
     def state_is_fully_valid(state):
         placements, _ = _expand_state(state, items, container)
@@ -252,79 +210,23 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
         validation["valid"] = validation["valid"] and validation["sequence_valid"]
         return validation["valid"]
 
-    # Completion is a mandatory contract, not an optional heuristic. Complete
-    # the strongest diverse states before and after LNS.
-    unique_candidates = {}
-    requested_completion_limit = int(options.get("completion_candidate_limit", 24))
-    completion_candidate_limit = max(
-        len(seed_candidates),
-        max(1, min(requested_completion_limit, 6 if auto_items else requested_completion_limit)),
+    portfolio_states, portfolio = staged_portfolio_search(
+        container, items,
+        beam_width=beam_width,
+        max_block_placements=max_placements,
+        min_support_ratio=min_support_ratio,
+        solution_limit=solution_limit,
+        deadline=deadline,
+        max_blocks_per_sku=int(options.get("max_blocks_per_sku", 140)),
+        fixed_max_blocks_per_sku=max(1, int(options.get("fixed_max_blocks_per_sku", 6))),
+        portfolio_limit=max(2, int(options.get("stage_portfolio_limit", 6))),
     )
-    candidate_order = seed_candidates+sorted(
-        candidates,
-        key=lambda candidate: (candidate.volume, *_layout_compactness(candidate, items)),
-        reverse=True,
-    )
-    for state in candidate_order:
-        if quantity_is_valid(state.counts, items, container) and state_is_fully_valid(state):
-            unique_candidates.setdefault(_state_signature(state, items), state)
-        if len(unique_candidates) >= completion_candidate_limit:
+    selected_states = []
+    for state in portfolio_states:
+        if state_is_fully_valid(state):
+            selected_states.append(state)
+        if len(selected_states) >= solution_limit:
             break
-    completed_candidates = []
-    for state in unique_candidates.values():
-        completed, _ = complete_state(
-            state, items, quantity_ceiling, container, min_support_ratio, mode,
-            max_additions=int(options.get("completion_max_additions", 500)),
-            move_validator=completion_move_valid,
-        )
-        probe, probe_additions = complete_state(
-            completed, items, quantity_ceiling, container, min_support_ratio, mode,
-            max_additions=1, move_validator=completion_move_valid,
-        )
-        if probe_additions == 0 and state_is_fully_valid(completed):
-            completed_candidates.append(completed)
-
-    # Deterministic LNS is safe for fixed-only plans.  For mixed plans the
-    # optional SKU must never be allowed to rewrite the already solved fixed
-    # layout, so its placement is handled only by complete_state below.
-    lns_pool = list(completed_candidates)
-    no_improvement = 0
-    best_before_lns = max((state.volume for state in lns_pool), default=0.0)
-    for _ in range(lns_rounds if not auto_items else 0):
-        if time.perf_counter() >= deadline or not lns_pool:
-            break
-        sources = sorted(lns_pool, key=lambda state: state.volume, reverse=True)[:2]
-        destroyed = []
-        for source in sources:
-            destroyed.extend(destroy_states(source, search_items, container, mode))
-        repaired = beam_pack_solutions(
-            search_items, search_quantity, container, block_defs, max(10, beam_width//2),
-            max(12, max_placements//2), min_support_ratio, destroyed, mode,
-            archive_limit=max(8, solution_limit*4), deadline=deadline,
-        ) if destroyed else []
-        improved_this_round = False
-        for state in repaired:
-            if not quantity_is_valid(state.counts, items, container):
-                continue
-            completed, _ = complete_state(
-                state, items, quantity_ceiling, container, min_support_ratio, mode,
-                max_additions=int(options.get("completion_max_additions", 500)),
-                move_validator=completion_move_valid,
-            )
-            _, additions = complete_state(
-                completed, items, quantity_ceiling, container, min_support_ratio, mode,
-                max_additions=1, move_validator=completion_move_valid,
-            )
-            if additions == 0 and state_is_fully_valid(completed):
-                lns_pool.append(completed)
-                if completed.volume > best_before_lns+1e-9:
-                    best_before_lns = completed.volume
-                    improved_this_round = True
-        no_improvement = 0 if improved_this_round else no_improvement+1
-        if no_improvement >= int(options.get("lns_no_improvement_rounds", 3)):
-            break
-
-    selected_states = _select_diverse_states(completed_candidates+lns_pool, items, container, solution_limit)
     if not selected_states:
         fixed_requirements = "、".join(
             f"{item.sku}={legal_min_quantity(item)}箱"
@@ -336,6 +238,10 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
             "请检查固定数量、装载顺序、柜体尺寸和横向缝隙。"
         )
 
+    auto_item = next((item for item in items if item.is_auto_fill), None)
+    auto_upper = cp_candidate.get(auto_item.sku) if auto_item else None
+    seed_volume = max((state.volume for state in selected_states), default=0.0)
+    solution_status = "PORTFOLIO_OPTIMAL" if portfolio.selected_by_cp_sat else "BEST_FOUND"
     results = []
     for index, state in enumerate(selected_states, 1):
         _, preview_blocks = _expand_state(state, items, container)
@@ -346,10 +252,14 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
             name = "交错混装候选"
         else:
             name = f"候选方案 {index}"
-        # The state was completed to a small-block fixed point above.
         result = _result_from_state(
             state, container, items, mode, upper, min_support_ratio, started,
-            f"{mode}-{index}", name, seed_volume, True, True,
+            f"{mode}-{index}", name, seed_volume, False,
+            solution_status=solution_status,
+            optimization_scope=portfolio.scope,
+            upper_bound_proven=False,
+            auto_fill_upper_quantity=auto_upper,
+            portfolio_candidates=portfolio.expanded_candidates,
         )
         if result.validation["valid"]:
             results.append(result)

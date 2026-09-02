@@ -16,6 +16,8 @@ SOLVER_OPTIONS = {
     "beam_width": 32,
     "solution_limit": 4,
     "max_blocks_per_sku": 140,
+    "fixed_max_blocks_per_sku": 6,
+    "stage_portfolio_limit": 6,
     "max_block_placements": 72,
     "min_support_ratio": 0.8,
     "time_limit_seconds": 300,

@@ -2,8 +2,10 @@ import pytest
 
 from app.container_loading.models.container import Container
 from app.container_loading.models.item import Item
+from app.container_loading.solver.beam_search import SearchState
 from app.container_loading.solver.optimizer import optimize_container
 from app.container_loading.solver.quantity_optimizer import validate_quantity_plan
+from app.container_loading.solver.stage_portfolio import _select_with_cp_sat
 
 
 def _item(sku, *, minimum=0, maximum=None, stage=1):
@@ -98,3 +100,46 @@ def test_fixed_layout_uses_cross_section_before_long_axial_wall():
     assert result.validation["valid"] is True
     a_blocks = [block for block in result.blocks if block.sku == "A"]
     assert a_blocks and max(block.length for block in a_blocks) <= 3000
+
+
+def test_stage_portfolio_reports_an_honest_auto_upper_bound():
+    fixed = _item("A", minimum=8, maximum=8, stage=1)
+    auto = _item("B", stage=2)
+    result = optimize_container(
+        Container(container_length=80, container_width=30, container_height=30, clearance_mm=5),
+        [fixed, auto],
+        "UNIFIED_STAGE_MAX",
+        {
+            "time_limit_seconds": 4,
+            "beam_width": 20,
+            "max_block_placements": 36,
+            "solution_limit": 1,
+            "max_blocks_per_sku": 80,
+            "fixed_max_blocks_per_sku": 4,
+        },
+    )
+
+    assert result.validation["valid"] is True
+    assert result.solution_status in {"BEST_FOUND", "PORTFOLIO_OPTIMAL"}
+    assert result.optimization_scope == "pattern-portfolio"
+    assert result.upper_bound_proven is False
+    assert result.auto_fill_upper_quantity is not None
+    assert result.auto_fill_gap_boxes is not None
+
+
+def test_portfolio_selection_maximizes_last_stage_auto_before_compactness():
+    fixed = _item("A", minimum=1, maximum=1, stage=1)
+    auto = _item("B", stage=2)
+    compact_lower_fill = SearchState(
+        counts={"A": 1, "B": 5},
+        blocks=[({"sku": "A", "length": 10}, (0, 0, 0)), ({"sku": "B", "length": 10}, (10, 0, 0))],
+    )
+    wider_higher_fill = SearchState(
+        counts={"A": 1, "B": 6},
+        blocks=[({"sku": "A", "length": 100}, (0, 0, 0)), ({"sku": "B", "length": 100}, (100, 0, 0))],
+    )
+
+    selected, proven = _select_with_cp_sat([compact_lower_fill, wider_higher_fill], [fixed, auto])
+
+    assert proven is True
+    assert selected[0] is wider_higher_fill
