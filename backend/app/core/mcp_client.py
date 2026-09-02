@@ -31,9 +31,25 @@ class StreamableHttpMcpClient:
             return {}
         if "text/event-stream" not in response.headers.get("content-type", ""):
             return response.json()
+        events: list[dict[str, Any]] = []
         for line in response.text.splitlines():
-            if line.startswith("data:"):
-                return json.loads(line[5:].strip())
+            if not line.startswith("data:"):
+                continue
+            raw = line[5:].strip()
+            if not raw or raw == "[DONE]":
+                continue
+            try:
+                event = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                # A stream may contain progress/notification events before the
+                # JSON-RPC result. Prefer the first actual result or error.
+                if "result" in event or "error" in event:
+                    return event
+                events.append(event)
+        if events:
+            return events[-1]
         raise McpError("领星 MCP 返回了空事件流")
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
@@ -202,8 +218,34 @@ class StreamableHttpMcpClient:
     @staticmethod
     def _parse_tool_result(payload: dict[str, Any]) -> Any:
         result = payload.get("result", {})
+        if not isinstance(result, dict):
+            raise McpError("领星 MCP 返回结果格式异常")
         tool_error = result.get("isError")
-        for content in result.get("content", []):
+        structured = result.get("structuredContent")
+        if structured is not None:
+            if tool_error:
+                detail = (
+                    structured.get("message")
+                    or structured.get("msg")
+                    or structured.get("error")
+                    if isinstance(structured, dict)
+                    else structured
+                )
+                raise McpError(detail or "领星 MCP 工具执行失败")
+            return structured
+
+        content_blocks = result.get("content", [])
+        if isinstance(content_blocks, dict):
+            content_blocks = [content_blocks]
+        for content in content_blocks if isinstance(content_blocks, list) else []:
+            if not isinstance(content, dict):
+                continue
+            if content.get("type") == "json":
+                value = content.get("json", content.get("data"))
+                if value is not None:
+                    if tool_error:
+                        raise McpError("领星 MCP 工具执行失败")
+                    return value
             if content.get("type") != "text":
                 continue
             text = content.get("text", "")
@@ -229,6 +271,10 @@ class StreamableHttpMcpClient:
         if tool_error:
             logger.warning("LingXing MCP tool error: response had no text content")
             raise McpError("领星 MCP 工具执行失败")
+        # Some MCP gateways return the tool envelope directly in `result`
+        # without either content or structuredContent.
+        if any(key in result for key in ("code", "data", "success", "msg", "message")):
+            return result
         raise McpError("领星 MCP 没有返回可解析的数据")
 
     @staticmethod
