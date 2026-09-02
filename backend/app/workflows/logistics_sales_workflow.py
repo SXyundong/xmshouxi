@@ -102,6 +102,7 @@ class LogisticsSalesWorkflow:
     PREVIEW_TTL_MINUTES = 15
     SKU_BATCH_SIZE = 40
     QUERY_PAGE_SIZE = 1000
+    QUERY_FIELD = "msku"
     _write_lock = asyncio.Lock()
 
     FIELD_ALIASES = {
@@ -298,7 +299,7 @@ class LogisticsSalesWorkflow:
         groups: dict[ProductKey, list[int]],
     ) -> tuple[dict[int, dict[ProductKey, int]], list[dict[str, Any]]]:
         today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
-        unique_skus = sorted({key.sku for key in groups})
+        unique_mskus = sorted({key.amazon_sku for key in groups if key.amazon_sku})
         period_sales: dict[int, dict[ProductKey, int]] = {}
         warnings: list[dict[str, Any]] = []
         call_index = 0
@@ -308,7 +309,7 @@ class LogisticsSalesWorkflow:
             incomplete_records = 0
             duplicate_records = 0
             start = today - timedelta(days=days - 1)
-            for sku_batch in self._chunks(unique_skus, self.SKU_BATCH_SIZE):
+            for msku_batch in self._chunks(unique_mskus, self.SKU_BATCH_SIZE):
                 if call_index:
                     # LingXing documents a per-tool QPS limit of 1.
                     await asyncio.sleep(1.05)
@@ -321,11 +322,11 @@ class LogisticsSalesWorkflow:
                         "start_date": start.isoformat(),
                         "end_date": today.isoformat(),
                         "date_type": "purchase",
-                        "search_field": "local_sku",
-                        "search_value": sku_batch,
-                        # LingXing requires summary mode for SKU-dimension queries.
-                        "summary_field": "sku",
-                        "summary_field_level1": "sku",
+                        "search_field": self.QUERY_FIELD,
+                        "search_value": msku_batch,
+                        # LingXing requires summary mode for MSKU-dimension queries.
+                        "summary_field": self.QUERY_FIELD,
+                        "summary_field_level1": self.QUERY_FIELD,
                         "turn_on_summary": 1,
                         "date_view_order_type": 0,
                         "sort_field": "volume",
@@ -662,10 +663,12 @@ class LogisticsSalesWorkflow:
             logger.warning(
                 "LingXing sales payload error: code=%r message=%r data=%s",
                 payload.get("code"),
-                payload.get("message"),
+                payload.get("message") or payload.get("msg"),
                 repr(payload.get("data"))[:500],
             )
-            raise LogisticsWorkflowError(payload.get("message") or "领星查询失败")
+            raise LogisticsWorkflowError(
+                payload.get("message") or payload.get("msg") or "领星查询失败"
+            )
         data = payload.get("data")
         if not isinstance(data, dict):
             return data

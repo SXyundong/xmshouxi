@@ -111,14 +111,14 @@ class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
             if not groups:
                 raise LogisticsWorkflowError("PostgreSQL 中没有可导出的商品数据")
 
-            unique_skus = sorted({key.sku for key in groups if key.sku})
+            unique_mskus = sorted({key.amazon_sku for key in groups if key.amazon_sku})
             today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
             # Sync the full number of completed days requested (today excluded).
             sync_start = today - timedelta(days=settings.LOGISTICS_INITIAL_SYNC_DAYS)
             sync_end = today - timedelta(days=1)
             await self._ensure_cache(
                 job_id,
-                unique_skus,
+                unique_mskus,
                 sync_start,
                 sync_end,
                 force_refresh=force_refresh,
@@ -559,13 +559,13 @@ class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
                 self._read_product_groups,
                 target,
             )
-            unique_skus = sorted({key.sku for key in groups})
+            unique_mskus = sorted({key.amazon_sku for key in groups if key.amazon_sku})
             today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
             sync_start = today - timedelta(days=settings.LOGISTICS_INITIAL_SYNC_DAYS)
             sync_end = today - timedelta(days=1)
             await self._ensure_cache(
                 job_id,
-                unique_skus,
+                unique_mskus,
                 sync_start,
                 sync_end,
                 force_refresh=force_refresh,
@@ -619,41 +619,41 @@ class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
     async def _ensure_cache(
         self,
         job_id: str,
-        skus: list[str],
+        mskus: list[str],
         start: date,
         end: date,
         force_refresh: bool = False,
     ) -> None:
         if force_refresh:
             wanted_dates = self.cache.date_range(start, end)
-            missing = {sku: wanted_dates for sku in sorted(set(skus))}
+            missing = {msku: wanted_dates for msku in sorted(set(mskus))}
         else:
-            missing = self.cache.missing_dates(skus, start, end)
+            missing = self.cache.missing_dates(mskus, start, end)
             # Yesterday can still be corrected in LingXing. Refresh it before
             # calculating rolling periods even when coverage is marked complete.
-            for sku in sorted(set(skus)):
-                dates = missing.setdefault(sku, [])
+            for msku in sorted(set(mskus)):
+                dates = missing.setdefault(msku, [])
                 if end not in dates:
                     dates.append(end)
         ranges: dict[tuple[date, date], list[str]] = defaultdict(list)
-        for sku, dates in missing.items():
+        for msku, dates in missing.items():
             for range_start, range_end in self._contiguous_ranges(dates):
-                ranges[(range_start, range_end)].append(sku)
+                ranges[(range_start, range_end)].append(msku)
         requests = [
-            (range_start, range_end, sku_batch)
-            for (range_start, range_end), range_skus in sorted(ranges.items())
-            for sku_batch in self._chunks(sorted(range_skus), self.CACHE_BATCH_SIZE)
+            (range_start, range_end, msku_batch)
+            for (range_start, range_end), range_mskus in sorted(ranges.items())
+            for msku_batch in self._chunks(sorted(range_mskus), self.CACHE_BATCH_SIZE)
         ]
         if not requests:
             self.cache.update_job(job_id, "running", 90, "PostgreSQL 销量缓存已覆盖所需日期")
             return
-        for index, (range_start, range_end, sku_batch) in enumerate(requests, start=1):
+        for index, (range_start, range_end, msku_batch) in enumerate(requests, start=1):
             progress = 5 + int(index / len(requests) * 84)
             self.cache.update_job(
                 job_id,
                 "running",
                 progress,
-                f"正在查询第 {index}/{len(requests)} 批，SKU {len(sku_batch)} 个",
+                f"正在查询第 {index}/{len(requests)} 批，MSKU {len(msku_batch)} 个",
             )
             if index > 1:
                 await asyncio.sleep(self.QUERY_GAP_SECONDS)
@@ -663,10 +663,10 @@ class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
                 "start_date": range_start.isoformat(),
                 "end_date": range_end.isoformat(),
                 "date_type": "purchase",
-                "search_field": "local_sku",
-                "search_value": sku_batch,
-                "summary_field": "sku",
-                "summary_field_level1": "sku",
+                "search_field": self.QUERY_FIELD,
+                "search_value": msku_batch,
+                "summary_field": self.QUERY_FIELD,
+                "summary_field_level1": self.QUERY_FIELD,
                 "turn_on_summary": 1,
                 "date_view_order_type": 1,
                 "date_view_type": "day",
@@ -685,7 +685,7 @@ class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
             self.cache.save_response(request, payload, trace_id)
             self.cache.save_daily_records(
                 records,
-                sku_batch,
+                msku_batch,
                 range_start,
                 range_end,
                 trace_id,
@@ -802,8 +802,9 @@ class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
         warnings: list[dict[str, Any]] = []
         missing_rows = 0
         for key, rows in groups.items():
+            cache_key = key.amazon_sku or key.sku
             records = self.cache.daily_records(
-                key.sku,
+                cache_key,
                 today - timedelta(days=settings.LOGISTICS_INITIAL_SYNC_DAYS),
                 today - timedelta(days=1),
             )
@@ -826,7 +827,7 @@ class CachedLogisticsSalesWorkflow(LogisticsSalesWorkflow):
                     {
                         "level": "warning",
                         "code": "dimension_validation",
-                        "message": "已按领星SKU+国家确定商品，但品名/品类/店铺存在映射差异，请复核",
+                        "message": "已按MSKU+国家确定商品，但品名/品类/店铺存在映射差异，请复核",
                         "rows": rows,
                         "identity": {**key.as_dict(), "lingxing_sku": key.sku},
                     }

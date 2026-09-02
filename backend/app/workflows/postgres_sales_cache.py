@@ -26,39 +26,39 @@ class PostgresSalesCache:
     def date_range(start: date, end: date) -> list[date]:
         return [start + timedelta(days=i) for i in range((end - start).days + 1)]
 
-    def missing_dates(self, skus: Iterable[str], start: date, end: date):
-        sku_list = sorted(set(skus))
-        if not sku_list:
+    def missing_dates(self, mskus: Iterable[str], start: date, end: date):
+        msku_list = sorted(set(mskus))
+        if not msku_list:
             return {}
         with SessionLocal() as s:
-            rows = s.execute(text("SELECT sku, sales_date FROM sales_coverage WHERE sku = ANY(:skus) AND sales_date BETWEEN :start AND :end AND status='complete'"), {"skus": sku_list, "start": start, "end": end}).all()
+            rows = s.execute(text("SELECT sku, sales_date FROM sales_coverage WHERE sku = ANY(:mskus) AND sales_date BETWEEN :start AND :end AND status='complete'"), {"mskus": msku_list, "start": start, "end": end}).all()
         covered = {(r.sku, r.sales_date) for r in rows}
-        return {sku: [d for d in self.date_range(start, end) if (sku, d) not in covered] for sku in sku_list if any((sku, d) not in covered for d in self.date_range(start, end))}
+        return {msku: [d for d in self.date_range(start, end) if (msku, d) not in covered] for msku in msku_list if any((msku, d) not in covered for d in self.date_range(start, end))}
 
     def save_response(self, request: dict[str, Any], response: Any, trace_id: str = ""):
         with SessionLocal.begin() as s:
             s.execute(text("INSERT INTO mcp_raw_responses(response_id, request_json, response_json, trace_id, fetched_at) VALUES (:id,:request,:response,:trace,:fetched) ON CONFLICT(response_id) DO NOTHING"), {"id": uuid.uuid4().hex, "request": json.dumps(request, ensure_ascii=False, sort_keys=True), "response": json.dumps(response, ensure_ascii=False), "trace": trace_id, "fetched": self._now()})
 
-    def save_daily_records(self, records: Iterable[DailySalesRecord], skus: Iterable[str], start: date, end: date, trace_id: str = "", replace_existing: bool = False):
+    def save_daily_records(self, records: Iterable[DailySalesRecord], mskus: Iterable[str], start: date, end: date, trace_id: str = "", replace_existing: bool = False):
         record_list = list(records)
-        requested = sorted(set(skus))
+        requested = sorted(set(mskus))
         with SessionLocal.begin() as s:
             if replace_existing and requested:
-                s.execute(text("DELETE FROM daily_sales WHERE sku = ANY(:skus) AND sales_date BETWEEN :start AND :end"), {"skus": requested, "start": start, "end": end})
+                s.execute(text("DELETE FROM daily_sales WHERE amazon_sku = ANY(:mskus) AND sales_date BETWEEN :start AND :end"), {"mskus": requested, "start": start, "end": end})
             for r in record_list:
                 s.execute(text("""INSERT INTO daily_sales(sales_date,sku,amazon_sku,product_name,category,store,country,platform,volume,trace_id,fetched_at) VALUES (:d,:sku,:msku,:name,:category,:store,:country,:platform,:volume,:trace,:fetched) ON CONFLICT(sales_date,sku,amazon_sku,country,store) DO UPDATE SET product_name=EXCLUDED.product_name, category=EXCLUDED.category, platform=EXCLUDED.platform, volume=EXCLUDED.volume, trace_id=EXCLUDED.trace_id, fetched_at=EXCLUDED.fetched_at"""), {"d": date.fromisoformat(r.sales_date), "sku": r.sku, "msku": r.amazon_sku, "name": r.product_name, "category": r.category, "store": r.store, "country": r.country, "platform": r.platform, "volume": r.volume, "trace": r.trace_id or trace_id, "fetched": self._now()})
-            for sku in requested:
+            for msku in requested:
                 for d in self.date_range(start, end):
-                    s.execute(text("INSERT INTO sales_coverage(sku,sales_date,status,trace_id,fetched_at) VALUES (:sku,:d,'complete',:trace,:fetched) ON CONFLICT(sku,sales_date) DO UPDATE SET status='complete', trace_id=EXCLUDED.trace_id, fetched_at=EXCLUDED.fetched_at"), {"sku": sku, "d": d, "trace": trace_id, "fetched": self._now()})
+                    s.execute(text("INSERT INTO sales_coverage(sku,sales_date,status,trace_id,fetched_at) VALUES (:msku,:d,'complete',:trace,:fetched) ON CONFLICT(sku,sales_date) DO UPDATE SET status='complete', trace_id=EXCLUDED.trace_id, fetched_at=EXCLUDED.fetched_at"), {"msku": msku, "d": d, "trace": trace_id, "fetched": self._now()})
 
-    def daily_records(self, sku: str, start: date, end: date):
+    def daily_records(self, msku: str, start: date, end: date):
         with SessionLocal() as s:
-            rows = s.execute(text("SELECT sales_date,sku,amazon_sku,product_name,category,store,country,platform,volume,trace_id FROM daily_sales WHERE sku=:sku AND sales_date BETWEEN :start AND :end ORDER BY sales_date,country,store,amazon_sku"), {"sku": sku, "start": start, "end": end}).mappings().all()
+            rows = s.execute(text("SELECT sales_date,sku,amazon_sku,product_name,category,store,country,platform,volume,trace_id FROM daily_sales WHERE amazon_sku=:msku AND sales_date BETWEEN :start AND :end ORDER BY sales_date,country,store,amazon_sku"), {"msku": msku, "start": start, "end": end}).mappings().all()
         return [DailySalesRecord(sales_date=r["sales_date"].isoformat(), sku=r["sku"], amazon_sku=r["amazon_sku"], product_name=r["product_name"], category=r["category"], store=r["store"], country=r["country"], platform=r["platform"], volume=r["volume"], trace_id=r["trace_id"]) for r in rows]
 
-    def coverage_complete(self, sku: str, start: date, end: date) -> bool:
+    def coverage_complete(self, msku: str, start: date, end: date) -> bool:
         with SessionLocal() as s:
-            n = s.execute(text("SELECT COUNT(*) FROM sales_coverage WHERE sku=:sku AND sales_date BETWEEN :start AND :end AND status='complete'"), {"sku": sku, "start": start, "end": end}).scalar_one()
+            n = s.execute(text("SELECT COUNT(*) FROM sales_coverage WHERE sku=:msku AND sales_date BETWEEN :start AND :end AND status='complete'"), {"msku": msku, "start": start, "end": end}).scalar_one()
         return n == len(self.date_range(start, end))
 
     def create_job(self, message: str = "排队中") -> str:
