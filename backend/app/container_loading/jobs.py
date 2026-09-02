@@ -75,23 +75,14 @@ class ContainerLoadingJobManager:
             items = to_solver_items(job.resolved)
             results: dict[str, dict] = {}
 
-            self._update(job, progress=10, message="正在计算上帝视角极限方案")
-            theoretical = optimize_container(
+            self._update(job, progress=10, message="正在计算统一阶段装柜方案")
+            unified = optimize_container(
                 job.container,
                 items,
-                "THEORETICAL_MAX",
+                "UNIFIED_STAGE_MAX",
                 dict(SOLVER_OPTIONS),
             )
-            results["THEORETICAL_MAX"] = theoretical.model_dump(mode="json")
-
-            self._update(job, progress=52, message="正在计算顺序可执行极限方案")
-            realistic = optimize_container(
-                job.container,
-                items,
-                "SEQUENCE_REALISTIC_MAX",
-                dict(SOLVER_OPTIONS),
-            )
-            results["SEQUENCE_REALISTIC_MAX"] = realistic.model_dump(mode="json")
+            results["UNIFIED_STAGE_MAX"] = unified.model_dump(mode="json")
 
             self._update(job, status="complete", progress=100, message="装柜方案计算完成", results=results)
         except Exception as exc:  # Keep the job API stable and expose a safe error to the UI.

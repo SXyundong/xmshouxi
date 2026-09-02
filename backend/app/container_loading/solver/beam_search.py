@@ -375,11 +375,20 @@ def _prune(states, items, beam_width):
     states.sort(key=lambda state: state.score, reverse=True)
     chosen, signatures = [], set()
     groups = {}
-    # First preserve different stage/fulfilled-SKU/last-SKU branches.
+    # Preserve different quantity-progress branches.  Grouping only by the
+    # fulfilled mask loses states that are halfway through a large fixed
+    # quantity, which can make an otherwise feasible exact plan disappear
+    # from a narrow beam before the SKU reaches its required count.
     for state in states:
         mask = tuple(state.counts.get(item.sku, 0) >= legal_min_quantity(item) for item in items)
+        progress = tuple(
+            0 if legal_min_quantity(item) == 0 else min(
+                4, state.counts.get(item.sku, 0) * 4 // legal_min_quantity(item)
+            )
+            for item in items
+        )
         last_sku = state.blocks[-1][0]["sku"] if state.blocks else ""
-        group = (state.stage_index, mask, last_sku)
+        group = (state.stage_index, mask, progress, last_sku)
         if groups.get(group, 0) >= 2:
             continue
         signature = _signature(state, items)

@@ -20,7 +20,7 @@ from .maximal_spaces import spaces_after_blocks
 from .quantity_optimizer import legal_max_quantity, quantity_is_valid, quantity_search_info, validate_quantity_plan
 
 
-SUPPORTED_MODES = {"THEORETICAL_MAX", "SEQUENCE_REALISTIC_MAX"}
+SUPPORTED_MODES = {"UNIFIED_STAGE_MAX", "THEORETICAL_MAX", "SEQUENCE_REALISTIC_MAX"}
 
 
 def _ordered_state(state, items, container, realistic):
@@ -162,8 +162,8 @@ def _select_diverse_states(states, items, container, limit):
 def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
     options = options or {}
     mode = str(mode).upper()
-    if mode == "FACTORY_REALISTIC_MAX":
-        mode = "SEQUENCE_REALISTIC_MAX"
+    if mode in {"FACTORY_REALISTIC_MAX", "THEORETICAL_MAX", "SEQUENCE_REALISTIC_MAX"}:
+        mode = "UNIFIED_STAGE_MAX"
     if mode not in SUPPORTED_MODES:
         raise ValueError(f"mode must be one of {sorted(SUPPORTED_MODES)}")
     if len({item.sku for item in items}) != len(items):
@@ -311,7 +311,15 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
 
     selected_states = _select_diverse_states(completed_candidates+lns_pool, items, container, solution_limit)
     if not selected_states:
-        raise ValueError("no 3D-feasible solution satisfies all SKU minimum quantities")
+        fixed_requirements = "、".join(
+            f"{item.sku}={legal_min_quantity(item)}箱"
+            for item in items
+            if not item.is_auto_fill
+        ) or "无固定数量商品"
+        raise ValueError(
+            f"统一阶段装柜无法满足固定数量：{fixed_requirements}。"
+            "请检查固定数量、装载顺序、柜体尺寸和横向缝隙。"
+        )
 
     results = []
     for index, state in enumerate(selected_states, 1):
