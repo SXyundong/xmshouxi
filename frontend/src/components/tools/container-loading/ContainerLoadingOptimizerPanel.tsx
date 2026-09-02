@@ -45,7 +45,7 @@ export default function ContainerLoadingOptimizerPanel(){
     if(items.some(item=>item.productId===candidate.id)){setLookupError('该商品已经添加');return;}
     const next=items.length+1; const dimensions=[candidate.carton_length_cm,candidate.carton_width_cm,candidate.carton_height_cm,candidate.carton_weight_kg];
     setResults({});setSelected(null);setFocusSku(null);setLookupError('');
-    setItems(rows=>[...rows,{productId:candidate.id,solverSku:`PRODUCT::${candidate.id}`,sku:candidate.sku,msku:candidate.msku,productName:candidate.product_name,country:candidate.country,store:candidate.store,l:dimensions[0] as number,w:dimensions[1] as number,h:dimensions[2] as number,weight:dimensions[3] as number,min:0,max:500,step:1,stage:Math.max(1,...rows.map(row=>row.stage)),color:`hsl(${(next*83)%360} 75% 62%)`}]);setCandidates([]);setIdentifier('');
+    setItems(rows=>[...rows,{productId:candidate.id,solverSku:`PRODUCT::${candidate.id}`,sku:candidate.sku,msku:candidate.msku,productName:candidate.product_name,country:candidate.country,store:candidate.store,l:dimensions[0] as number,w:dimensions[1] as number,h:dimensions[2] as number,weight:dimensions[3] as number,min:0,max:500,step:1,stage:Math.max(1,...rows.map(row=>row.stage)),color:`hsl(${(next*83)%360}, 75%, 62%)`}]);setCandidates([]);setIdentifier('');
   }
   function removeSku(index:number){setResults({});setSelected(null);setFocusSku(null);setItems(rows=>rows.filter((_,i)=>i!==index))}
   async function runBoth(){
