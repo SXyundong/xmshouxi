@@ -34,6 +34,44 @@ def _axis_counts(max_count: int) -> list[int]:
     return sorted(v for v in values if 1 <= v <= max_count)
 
 
+def _space_axis_counts(max_nx: int, max_ny: int, max_nz: int, remaining: int,
+                       filler_only: bool = False) -> tuple[set[int], set[int], set[int], set[tuple[int, int, int]]]:
+    """Return axis counts that include cross-section-first exact fits.
+
+    Sampling only ``1 / half / max`` on each axis misses useful layouts such
+    as 200 cartons arranged as 20 x 2 x 5.  The old sampler therefore tends
+    to choose a 10 metre long, two-carton-wide wall even when the same count
+    can be packed in a much shorter, wider block.  For every Y/Z cross-section
+    we explicitly add the largest legal X count, which also preserves exact
+    divisors of the remaining fixed quantity.
+    """
+    x_values = {1, max_nx, max(1, max_nx // 2), max(1, max_nx - 1)}
+    y_values = {1, max_ny, max(1, max_ny // 2), max(1, max_ny - 1)}
+    z_values = {1, max_nz, max(1, max_nz // 2), max(1, max_nz - 1)}
+    cross_section_counts = set()
+    if filler_only:
+        x_values.update(range(1, min(max_nx, 4) + 1))
+        y_values.update(range(1, min(max_ny, 4) + 1))
+        z_values.update(range(1, min(max_nz, 4) + 1))
+
+    for ny in range(1, max_ny + 1):
+        for nz in range(1, max_nz + 1):
+            layer = ny * nz
+            if layer <= remaining:
+                largest_x = min(max_nx, max(1, remaining // layer))
+                cross_section_counts.add((largest_x, ny, nz))
+                # Keep the nearest lower count as a separate candidate when
+                # the exact remaining quantity cannot fill a whole layer.
+                lower_x = min(max_nx, max(1, (remaining - 1) // layer))
+                cross_section_counts.add((lower_x, ny, nz))
+    return (
+        {value for value in x_values if 1 <= value <= max_nx},
+        {value for value in y_values if 1 <= value <= max_ny},
+        {value for value in z_values if 1 <= value <= max_nz},
+        cross_section_counts,
+    )
+
+
 def generate_blocks(item, container, max_candidates: int = 80) -> list[dict]:
     """Generate useful tight homogeneous blocks for one SKU."""
     cl, cw, ch = container.dimensions_mm
@@ -113,26 +151,22 @@ def generate_blocks_for_space(item, space, remaining: int, max_candidates: int =
         if min(max_nx, max_ny, max_nz) <= 0:
             continue
         max_nx = min(max_nx, remaining)
-        x_values = {1, max_nx, max(1, max_nx//2), max(1, max_nx-1)}
-        y_values = {1, max_ny, max(1, max_ny//2), max(1, max_ny-1)}
-        z_values = {1, max_nz, max(1, max_nz//2), max(1, max_nz-1)}
-        if filler_only:
-            x_values.update(range(1, min(max_nx, 4)+1))
-            y_values.update(range(1, min(max_ny, 4)+1))
-            z_values.update(range(1, min(max_nz, 4)+1))
-        for nx in x_values:
-            for ny in y_values:
-                for nz in z_values:
-                    count = nx*ny*nz
-                    if count > remaining or (filler_only and count > 16):
-                        continue
-                    result.append({
-                        "sku": item.sku, "nx": nx, "ny": ny, "nz": nz, "box_count": count,
-                        "length": _axis_size(nx, l, clearance), "width": _axis_size(ny, w, clearance),
-                        "height": nz*h, "unit_length": l, "unit_width": w, "unit_height": h,
-                        "orientation": orientation,
-                        "weight_kg": count*item.carton_weight_kg, "volume_m3": count*item.volume_m3,
-                    })
+        x_values, y_values, z_values, cross_section_counts = _space_axis_counts(
+            max_nx, max_ny, max_nz, remaining, filler_only
+        )
+        count_triples = {(nx, ny, nz) for nx in x_values for ny in y_values for nz in z_values}
+        count_triples.update(cross_section_counts)
+        for nx, ny, nz in count_triples:
+            count = nx*ny*nz
+            if count > remaining or (filler_only and count > 16):
+                continue
+            result.append({
+                "sku": item.sku, "nx": nx, "ny": ny, "nz": nz, "box_count": count,
+                "length": _axis_size(nx, l, clearance), "width": _axis_size(ny, w, clearance),
+                "height": nz*h, "unit_length": l, "unit_width": w, "unit_height": h,
+                "orientation": orientation,
+                "weight_kg": count*item.carton_weight_kg, "volume_m3": count*item.volume_m3,
+            })
     unique = {}
     for block in result:
         key = (block["orientation"], block["nx"], block["ny"], block["nz"])
@@ -164,5 +198,3 @@ def generate_blocks_for_space(item, space, remaining: int, max_candidates: int =
         if len(selected) >= max_candidates:
             break
     return selected[:max_candidates]
-
-

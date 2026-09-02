@@ -136,8 +136,16 @@ def _lane_candidates(item, container, limit=18):
                     if block["box_count"] % item.quantity_step:
                         continue
                     candidates.append(block)
-    # Volume first, but preserve narrow lanes so multiple SKUs can share Y.
-    candidates.sort(key=lambda b: (b["volume_m3"], -b["width"], b["height"]), reverse=True)
+    # Fixed quantities have the same volume regardless of orientation.  Rank
+    # them by cross-section first so a mosaic uses the width/height of the
+    # container instead of turning each SKU into a long axial wall.
+    candidates.sort(key=lambda b: (
+        b["width"] * b["height"],
+        -b["length"],
+        b["width"],
+        b["height"],
+        b["volume_m3"],
+    ), reverse=True)
     selected = candidates[:max(4, limit//2)]
     for block in sorted(candidates, key=lambda b: (b["width"], -b["volume_m3"])):
         if block not in selected:
@@ -215,27 +223,23 @@ def _placed_rectangles(state):
 def _stage_x_bounds(state, item, container, all_items):
     """Return the current stage's allowed X band.
 
-    Earlier stages occupy the head-side part of the container.  A stage may
-    widen across Y/Z at its current X frontier, then advance that frontier;
-    it cannot jump over an empty longitudinal gap.  This keeps a factory's
-    cargo compact while preserving the existing EMS geometry search.
+    A stage advances its own X frontier only after using available Y/Z space.
+    Different stages are allowed to share an X range when they use different
+    remaining cross-section lanes; accessibility and collision checks decide
+    whether that placement is physically possible.
     """
     stage = item.effective_loading_stage
     clearance = getattr(container, "clearance_mm_int", 0)
     stage_by_sku = {candidate.sku: candidate.effective_loading_stage for candidate in all_items}
-    previous = [
-        (block, position)
-        for block, position in state.blocks
-        if stage_by_sku.get(block["sku"], stage) < stage
-    ]
-    previous_end = max((position[0] + block["length"] for block, position in previous), default=0)
-    stage_start = previous_end + (clearance if previous else 0)
     current = [
         (block, position)
         for block, position in state.blocks
         if stage_by_sku.get(block["sku"], stage) == stage
     ]
-    frontier = max((position[0] + block["length"] for block, position in current), default=stage_start)
+    if not current:
+        return None
+    stage_start = min(position[0] for _, position in current)
+    frontier = max(position[0] + block["length"] for block, position in current)
     return stage_start, frontier
 
 
@@ -282,6 +286,12 @@ def _door_accepts_block(block, item, container):
 def _moves(state, eligible_items, quantity, container, min_support_ratio, limit, realistic=False,
            filler_only=False, all_items=None):
     occupied = _placed_rectangles(state)
+    # The independent validator checks support at individual-carton level.
+    # A block-level 80% test can therefore admit a top block whose cartons
+    # overhang the cartons below and later fail validation.  For the staged
+    # production layout require full footprint support for every stacked block;
+    # floor placements remain unaffected.
+    support_threshold = max(float(min_support_ratio), 1.0) if realistic else float(min_support_ratio)
     moves = []
     for space in state.empty_spaces:
         for item in eligible_items:
@@ -298,16 +308,18 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
                     continue
                 for x, y, z in _positions(space, block, occupied, filler_only):
                     if realistic:
-                        stage_start, frontier = _stage_x_bounds(state, item, container, all_items or eligible_items)
-                        if x < stage_start or x > frontier + getattr(container, "clearance_mm_int", 0):
-                            continue
+                        stage_bounds = _stage_x_bounds(state, item, container, all_items or eligible_items)
+                        if stage_bounds is not None:
+                            stage_start, frontier = stage_bounds
+                            if x < stage_start or x > frontier + getattr(container, "clearance_mm_int", 0):
+                                continue
                     if not within(x, y, z, block["length"], block["width"], block["height"], container):
                         continue
                     probe = Rect3D(x, y, z, block["length"], block["width"], block["height"])
                     if any(overlaps(probe, existing, getattr(container, "clearance_mm_int", 0))
                            for existing in occupied):
                         continue
-                    if support_ratio(x, y, z, block["length"], block["width"], occupied) + 1e-9 < min_support_ratio:
+                    if support_ratio(x, y, z, block["length"], block["width"], occupied) + 1e-9 < support_threshold:
                         continue
                     if realistic and not swept_path_clear(x, y, z, block["length"], block["width"],
                                                            block["height"], occupied, container):
@@ -323,6 +335,7 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
             move[0]["width"],
             -move[1][0],
             -move[1][1],
+            -move[0]["length"],
             move[0]["volume_m3"],
             move[3],
             -move[2],
@@ -355,13 +368,39 @@ def _minimum_progress(state, items):
     return satisfied, sum(completions), min(completions, default=1.0)
 
 
+def _layout_compactness(state, items):
+    """Prefer short axial bands after quantity progress is equal.
+
+    The container's largest remaining EMS is not a useful quality signal for
+    this workflow: a long, narrow wall often leaves a deceptively large EMS
+    beside it.  Score each loading stage by its X span instead, which matches
+    the operational rule that a factory's cartons should occupy width/height
+    lanes before extending deep along the container.
+    """
+    stage_by_sku = {item.sku: item.effective_loading_stage for item in items}
+    spans = []
+    for stage in sorted(set(stage_by_sku.values())):
+        stage_blocks = [
+            (block, position) for block, position in state.blocks
+            if stage_by_sku.get(block["sku"]) == stage
+        ]
+        if stage_blocks:
+            spans.append(max(x + block["length"] for block, (x, _, _) in stage_blocks)
+                          - min(x for _, (x, _, _) in stage_blocks))
+    if not spans:
+        return (0, 0, 0)
+    return (-sum(spans), -max(spans), -max(block["length"] for block, _ in state.blocks))
+
+
 def _state_score(state, items, all_stages, realistic):
     valid = quantity_is_valid(state.counts, items, _state_score.container)
     satisfied, completion_sum, minimum_completion = _minimum_progress(state, items)
     stage_progress = state.stage_index/len(all_stages) if realistic and all_stages else 1.0
     largest_space = max((space.volume for space in state.empty_spaces), default=0)
+    compactness = _layout_compactness(state, items)
     return (int(valid), satisfied, round(completion_sum, 6), round(minimum_completion, 6),
-            round(state.volume, 9), round(stage_progress, 6), largest_space, -len(state.blocks))
+            round(state.volume, 9), round(stage_progress, 6), *compactness,
+            largest_space, -len(state.blocks))
 
 
 def _signature(state, items):
@@ -487,7 +526,7 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
 
     valid = [state for state in archive+states if quantity_is_valid(state.counts, items, container)]
     unique = {}
-    for state in sorted(valid, key=lambda value: value.volume, reverse=True):
+    for state in sorted(valid, key=lambda value: (value.volume, *_layout_compactness(value, items)), reverse=True):
         unique.setdefault(_signature(state, items), state)
         if len(unique) >= archive_limit:
             break
@@ -534,8 +573,17 @@ def complete_state(state, items, quantity, container, min_support_ratio=0.8,
             legal_moves.append(move)
         if not legal_moves:
             break
-        # Prefer volume, then tight fit; every iteration recomputes all EMS.
-        legal_moves.sort(key=lambda move: (move[0]["volume_m3"], -move[2], move[0]["box_count"]), reverse=True)
+        # Preserve the same width/height-first policy during completion.
+        legal_moves.sort(key=lambda move: (
+            move[0]["width"] * move[0]["height"],
+            move[0]["width"],
+            -move[1][0],
+            -move[1][1],
+            -move[0]["length"],
+            move[0]["volume_m3"],
+            -move[2],
+            move[0]["box_count"],
+        ), reverse=True)
         chosen = None
         for candidate in legal_moves:
             if move_validator is None or move_validator(completed, candidate[0], candidate[1]):

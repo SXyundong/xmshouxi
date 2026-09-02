@@ -69,3 +69,32 @@ def test_staged_search_preserves_large_fixed_quantities():
 
     assert result.sku_quantities == {"A": 10, "B": 10, "C": 10}
     assert result.validation["valid"] is True
+
+
+def test_fixed_layout_uses_cross_section_before_long_axial_wall():
+    items = [
+        Item(sku="A", carton_length_cm=60, carton_width_cm=41.5, carton_height_cm=24,
+             carton_weight_kg=1, min_quantity=200, max_quantity=200, loading_stage=1),
+        Item(sku="B", carton_length_cm=97, carton_width_cm=31, carton_height_cm=18,
+             carton_weight_kg=1, min_quantity=100, max_quantity=100, loading_stage=2),
+        Item(sku="C", carton_length_cm=88, carton_width_cm=32, carton_height_cm=29,
+             carton_weight_kg=1, min_quantity=100, max_quantity=100, loading_stage=2),
+    ]
+
+    result = optimize_container(
+        Container(), items, "UNIFIED_STAGE_MAX", {
+            "time_limit_seconds": 5,
+            "beam_width": 24,
+            "max_block_placements": 60,
+            "solution_limit": 1,
+            "lns_rounds": 0,
+            "completion_candidate_limit": 1,
+            "completion_max_additions": 10,
+            "max_blocks_per_sku": 100,
+        },
+    )
+
+    assert result.sku_quantities == {"A": 200, "B": 100, "C": 100}
+    assert result.validation["valid"] is True
+    a_blocks = [block for block in result.blocks if block.sku == "A"]
+    assert a_blocks and max(block.length for block in a_blocks) <= 3000

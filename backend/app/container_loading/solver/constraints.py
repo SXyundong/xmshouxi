@@ -86,22 +86,13 @@ def _door_validation(placements, container):
 
 
 def _stage_layout_validation(placements, items, container):
-    """Ensure factory stages occupy consecutive head-to-door X bands."""
-    if not placements:
-        return True
-    item_by_sku = {item.sku: item for item in items}
-    by_stage = defaultdict(list)
-    for placement in placements:
-        by_stage[item_by_sku[placement.sku].effective_loading_stage].append(placement)
-    clearance = getattr(container, "clearance_mm_int", 0)
-    previous_end = 0
-    for stage in sorted(by_stage):
-        current = by_stage[stage]
-        current_start = min(placement.x for placement in current)
-        if current_start < previous_end:
-            return False
-        previous_end = max(placement.x + placement.length for placement in current) + clearance
-    return True
+    """Keep stage order separate from geometry overlap.
+
+    Later factories may use a free lane in the same X section as an earlier
+    factory.  Stage order and door accessibility are validated independently;
+    overlap/collision validation remains carton-level.
+    """
+    return all(placement.x >= 0 and placement.y >= 0 and placement.z >= 0 for placement in placements)
 
 
 def validate_solution(placements, container, items, mode, min_support_ratio=0.8):

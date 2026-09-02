@@ -9,15 +9,14 @@ from .accessibility import validate_accessibility
 from .beam_search import (
     beam_pack_solutions,
     complete_state,
-    construct_equal_slab_state,
-    construct_mosaic_states,
     construct_single_sku_states,
+    _layout_compactness,
 )
 from .block_generator import generate_blocks
 from .constraints import validate_solution
 from .lns import destroy_states
 from .maximal_spaces import spaces_after_blocks
-from .quantity_optimizer import legal_max_quantity, quantity_is_valid, quantity_search_info, validate_quantity_plan
+from .quantity_optimizer import legal_max_quantity, legal_min_quantity, quantity_is_valid, quantity_search_info, validate_quantity_plan
 
 
 SUPPORTED_MODES = {"UNIFIED_STAGE_MAX", "THEORETICAL_MAX", "SEQUENCE_REALISTIC_MAX"}
@@ -128,7 +127,11 @@ def _state_signature(state, items):
 
 def _select_diverse_states(states, items, container, limit):
     unique = {}
-    for state in sorted(states, key=lambda candidate: candidate.volume, reverse=True):
+    for state in sorted(
+        states,
+        key=lambda candidate: (candidate.volume, *_layout_compactness(candidate, items)),
+        reverse=True,
+    ):
         if quantity_is_valid(state.counts, items, container):
             unique.setdefault(_state_signature(state, items), state)
     ranked = list(unique.values())
@@ -186,39 +189,42 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
         raise ValueError("minimum quantities violate volume or payload constraints")
     # The CP incumbent is one candidate, never a per-SKU search ceiling.
     quantity_ceiling = {item.sku: legal_max_quantity(item, container) for item in items}
+    fixed_items = [item for item in items if not item.is_auto_fill]
+    auto_items = [item for item in items if item.is_auto_fill]
+    # Fixed cargo is solved as a separate first phase.  The auto-fill SKU is
+    # deliberately excluded from this phase so it cannot make the solver
+    # fragment a required SKU merely to gain a few more optional cartons.
+    search_items = fixed_items or items
+    search_quantity = {
+        item.sku: (item.max_quantity if item.max_quantity is not None
+                   else legal_max_quantity(item, container))
+        for item in search_items
+    }
     physical_upper = container.operational_target_cbm if container.operational_mode == "hard_limit" else container.physical_cbm
     upper = min(cp_upper, physical_upper)
 
     block_defs = []
-    for item in items:
+    for item in search_items:
         block_defs.extend(generate_blocks(item, container, int(options.get("max_blocks_per_sku", 100))))
 
     candidates = []
-    slab = construct_equal_slab_state(items, container)
-    if slab is not None:
-        candidates.append(_ordered_state(slab, items, container, realistic))
-    mosaics = [_ordered_state(state, items, container, realistic)
-               for state in construct_mosaic_states(items, container, max(6, solution_limit*2))]
-    candidates.extend(mosaics)
-    candidates.extend(_ordered_state(state, items, container, realistic)
-                      for state in construct_single_sku_states(items, container))
+    # Do not seed the production search with the legacy equal-X-slab layout.
+    # That layout deliberately gives every SKU a long contiguous slice of the
+    # container and is exactly the unstable "long and narrow wall" pattern
+    # that the staged mixed-lane model is meant to avoid.  Keep the helper for
+    # backwards-compatible callers, but let EMS search build the first block.
+    candidates.extend(_ordered_state(state, search_items, container, realistic)
+                      for state in construct_single_sku_states(search_items, container))
     seed_candidates = list(candidates)
     seed_volume = max((state.volume for state in candidates if quantity_is_valid(state.counts, items, container)), default=0.0)
 
     # Empty search discovers layouts without a seed. Seeded searches refine the
-    # slab and mosaic lower bounds through their actual EMS residual spaces.
+    # residual spaces through the same fixed-quantity geometry rules.
     empty_solutions = beam_pack_solutions(
-        items, quantity_ceiling, container, block_defs, beam_width, max_placements,
+        search_items, search_quantity, container, block_defs, beam_width, max_placements,
         min_support_ratio, None, mode, archive_limit=solution_limit*8, deadline=deadline,
     )
     candidates.extend(empty_solutions)
-    if mosaics:
-        candidates.extend(beam_pack_solutions(
-            items, quantity_ceiling, container, block_defs, max(8, beam_width//2), max(8, max_placements//2),
-            min_support_ratio, mosaics[:min(3, len(mosaics))], mode, archive_limit=solution_limit*6,
-            deadline=deadline,
-        ))
-
     # Independent move validation is only needed during completion when
     # advanced stacking fields are active; ordinary benchmark items use the
     # faster geometric path and are independently validated afterwards.
@@ -249,8 +255,16 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
     # Completion is a mandatory contract, not an optional heuristic. Complete
     # the strongest diverse states before and after LNS.
     unique_candidates = {}
-    completion_candidate_limit = max(len(seed_candidates), int(options.get("completion_candidate_limit", 24)))
-    candidate_order = seed_candidates+sorted(candidates, key=lambda candidate: candidate.volume, reverse=True)
+    requested_completion_limit = int(options.get("completion_candidate_limit", 24))
+    completion_candidate_limit = max(
+        len(seed_candidates),
+        max(1, min(requested_completion_limit, 6 if auto_items else requested_completion_limit)),
+    )
+    candidate_order = seed_candidates+sorted(
+        candidates,
+        key=lambda candidate: (candidate.volume, *_layout_compactness(candidate, items)),
+        reverse=True,
+    )
     for state in candidate_order:
         if quantity_is_valid(state.counts, items, container) and state_is_fully_valid(state):
             unique_candidates.setdefault(_state_signature(state, items), state)
@@ -270,20 +284,21 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
         if probe_additions == 0 and state_is_fully_valid(completed):
             completed_candidates.append(completed)
 
-    # Deterministic LNS destroys suffix/door/top regions and repairs them with
-    # the same EMS beam search, keeping the best incumbent throughout.
+    # Deterministic LNS is safe for fixed-only plans.  For mixed plans the
+    # optional SKU must never be allowed to rewrite the already solved fixed
+    # layout, so its placement is handled only by complete_state below.
     lns_pool = list(completed_candidates)
     no_improvement = 0
     best_before_lns = max((state.volume for state in lns_pool), default=0.0)
-    for _ in range(lns_rounds):
+    for _ in range(lns_rounds if not auto_items else 0):
         if time.perf_counter() >= deadline or not lns_pool:
             break
         sources = sorted(lns_pool, key=lambda state: state.volume, reverse=True)[:2]
         destroyed = []
         for source in sources:
-            destroyed.extend(destroy_states(source, items, container, mode))
+            destroyed.extend(destroy_states(source, search_items, container, mode))
         repaired = beam_pack_solutions(
-            items, quantity_ceiling, container, block_defs, max(10, beam_width//2),
+            search_items, search_quantity, container, block_defs, max(10, beam_width//2),
             max(12, max_placements//2), min_support_ratio, destroyed, mode,
             archive_limit=max(8, solution_limit*4), deadline=deadline,
         ) if destroyed else []
