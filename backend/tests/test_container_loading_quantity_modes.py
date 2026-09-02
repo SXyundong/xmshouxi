@@ -143,3 +143,32 @@ def test_portfolio_selection_maximizes_last_stage_auto_before_compactness():
 
     assert proven is True
     assert selected[0] is wider_higher_fill
+
+
+def test_realistic_5mm_stage_mosaic_keeps_top_and_side_fill():
+    items = [
+        Item(sku="70046", carton_length_cm=60, carton_width_cm=41.5, carton_height_cm=24,
+             carton_weight_kg=9.55, min_quantity=200, max_quantity=200, loading_stage=1),
+        Item(sku="70047", carton_length_cm=97, carton_width_cm=31, carton_height_cm=18,
+             carton_weight_kg=10.45, min_quantity=100, max_quantity=100, loading_stage=2),
+        Item(sku="70051-A", carton_length_cm=88, carton_width_cm=32, carton_height_cm=29,
+             carton_weight_kg=16.2, min_quantity=150, max_quantity=150, loading_stage=2),
+        Item(sku="70051-D", carton_length_cm=88, carton_width_cm=32, carton_height_cm=29,
+             carton_weight_kg=16.2, min_quantity=0, max_quantity=None, loading_stage=3),
+    ]
+    result = optimize_container(
+        Container(clearance_mm=5), items, "UNIFIED_STAGE_MAX", {
+            "time_limit_seconds": 10,
+            "beam_width": 32,
+            "max_block_placements": 72,
+            "solution_limit": 1,
+            "stage_portfolio_limit": 4,
+            "fixed_max_blocks_per_sku": 6,
+        },
+    )
+
+    assert result.validation["valid"] is True
+    assert result.sku_quantities["70046"] == 200
+    assert result.sku_quantities["70047"] == 100
+    assert result.sku_quantities["70051-A"] == 150
+    assert result.sku_quantities["70051-D"] >= 436
