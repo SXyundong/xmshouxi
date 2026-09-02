@@ -6,7 +6,7 @@ from app.api.chat import router as chat_router
 from app.api.workflows import router as workflow_router
 from app.container_loading.api import router as container_loading_router
 
-app = FastAPI(title="电商多部门 Agent 系统", version="1.2.0")
+app = FastAPI(title="电商多部门 Agent 系统", version="1.2.1")
 
 # V1 简化：允许所有来源，避免前后端联调时的 CORS 问题
 app.add_middleware(
