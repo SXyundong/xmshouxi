@@ -5,6 +5,7 @@ from app.container_loading.models.item import Item
 from app.container_loading.solver.beam_search import SearchState
 from app.container_loading.solver.optimizer import optimize_container
 from app.container_loading.solver.quantity_optimizer import validate_quantity_plan
+from app.container_loading.solver.quantity_optimizer import auto_fill_quantity_upper_bound
 from app.container_loading.solver.stage_portfolio import _select_with_cp_sat
 
 
@@ -121,10 +122,25 @@ def test_stage_portfolio_reports_an_honest_auto_upper_bound():
 
     assert result.validation["valid"] is True
     assert result.solution_status in {"BEST_FOUND", "PORTFOLIO_OPTIMAL"}
-    assert result.optimization_scope == "pattern-portfolio"
+    assert result.optimization_scope == "stack-scan-lookahead"
     assert result.upper_bound_proven is False
     assert result.auto_fill_upper_quantity is not None
     assert result.auto_fill_gap_boxes is not None
+
+
+def test_auto_upper_bound_uses_residual_container_capacity():
+    items = [
+        Item(sku="A", carton_length_cm=60, carton_width_cm=41.5, carton_height_cm=24,
+             carton_weight_kg=9.55, min_quantity=200, max_quantity=200, loading_stage=1),
+        Item(sku="B", carton_length_cm=97, carton_width_cm=31, carton_height_cm=18,
+             carton_weight_kg=10.45, min_quantity=100, max_quantity=100, loading_stage=2),
+        Item(sku="C", carton_length_cm=88, carton_width_cm=32, carton_height_cm=29,
+             carton_weight_kg=16.2, min_quantity=150, max_quantity=150, loading_stage=2),
+        Item(sku="D", carton_length_cm=88, carton_width_cm=32, carton_height_cm=29,
+             carton_weight_kg=16.2, min_quantity=0, max_quantity=None, loading_stage=3),
+    ]
+
+    assert auto_fill_quantity_upper_bound(items, Container(clearance_mm=5)) == 569
 
 
 def test_portfolio_selection_maximizes_last_stage_auto_before_compactness():

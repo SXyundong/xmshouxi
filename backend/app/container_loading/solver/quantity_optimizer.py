@@ -29,6 +29,37 @@ def legal_max_quantity(item, container) -> int:
     return (upper // item.quantity_step) * item.quantity_step
 
 
+def auto_fill_quantity_upper_bound(items, container) -> int | None:
+    """Return the relaxation bound for the single last-stage auto SKU.
+
+    Fixed quantities already occupy part of the container.  The auto-fill
+    indicator must therefore use the residual volume and payload, rather than
+    the empty-container maximum returned by ``legal_max_quantity``.
+    """
+    auto_items = [item for item in items if item.is_auto_fill]
+    if not auto_items:
+        return None
+    auto_item = auto_items[0]
+    limit_cbm = (
+        container.operational_target_cbm
+        if container.operational_mode == "hard_limit"
+        else container.physical_cbm
+    )
+    fixed_items = [item for item in items if not item.is_auto_fill]
+    fixed_volume = sum(item.min_quantity * item.volume_m3 for item in fixed_items)
+    fixed_weight = sum(item.min_quantity * item.carton_weight_kg for item in fixed_items)
+    residual_volume = max(0.0, limit_cbm - fixed_volume)
+    residual_weight = max(0.0, container.max_payload - fixed_weight)
+    volume_bound = int(residual_volume / auto_item.volume_m3 + 1e-9) if auto_item.volume_m3 else 0
+    weight_bound = (
+        int(residual_weight / auto_item.carton_weight_kg + 1e-9)
+        if auto_item.carton_weight_kg
+        else volume_bound
+    )
+    return (min(volume_bound, weight_bound, legal_max_quantity(auto_item, container))
+            // auto_item.quantity_step) * auto_item.quantity_step
+
+
 def quantity_is_valid(quantity, items, container) -> bool:
     total_volume = 0.0
     total_weight = 0.0
@@ -108,4 +139,3 @@ def quantity_candidates(items, container, limit=40, **_ignored):
         if len(unique) >= limit:
             break
     return unique
-

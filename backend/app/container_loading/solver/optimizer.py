@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import time
 
 from ..models.block import Block
@@ -16,8 +19,15 @@ from .block_generator import generate_blocks
 from .constraints import validate_solution
 from .lns import destroy_states
 from .maximal_spaces import spaces_after_blocks
-from .quantity_optimizer import legal_max_quantity, legal_min_quantity, quantity_is_valid, quantity_search_info, validate_quantity_plan
-from .stage_portfolio import staged_portfolio_search
+from .quantity_optimizer import (
+    auto_fill_quantity_upper_bound,
+    legal_max_quantity,
+    legal_min_quantity,
+    quantity_is_valid,
+    quantity_search_info,
+    validate_quantity_plan,
+)
+from .stack_scan import stack_scan_search
 
 
 SUPPORTED_MODES = {"UNIFIED_STAGE_MAX", "THEORETICAL_MAX", "SEQUENCE_REALISTIC_MAX"}
@@ -81,7 +91,8 @@ def _partial_cross_section(blocks, container):
 def _result_from_state(state, container, items, mode, upper, min_support_ratio, started,
                        solution_id, solution_name, seed_volume, locally_maximal,
                        *, solution_status="BEST_FOUND", optimization_scope="pattern-portfolio",
-                       upper_bound_proven=False, auto_fill_upper_quantity=None, portfolio_candidates=0):
+                       upper_bound_proven=False, auto_fill_upper_quantity=None, portfolio_candidates=0,
+                       audit=None):
     # Keep the legacy mode labels for API/UI compatibility.  The first
     # version uses one staged, physically executable planning model for both.
     realistic = True
@@ -126,9 +137,53 @@ def _result_from_state(state, container, items, mode, upper, min_support_ratio, 
         auto_fill_upper_quantity=auto_fill_upper_quantity,
         auto_fill_gap_boxes=auto_gap,
         portfolio_candidates=portfolio_candidates,
+        audit=audit or {},
         solve_time_seconds=round(time.perf_counter()-started, 4), initial_seed_cbm=round(seed_volume, 6),
         search_improvement_cbm=round(max(0.0, loaded_cbm-seed_volume), 6),
     )
+
+
+def _audit_context(container, items, effective_options, portfolio) -> dict:
+    """Build a non-sensitive fingerprint for local/production comparisons."""
+    snapshot = {
+        "container": {
+            "dimensions_mm": container.dimensions_mm,
+            "clearance_mm": container.clearance_mm,
+            "max_payload": container.max_payload,
+            "operational_target_cbm": container.operational_target_cbm,
+            "operational_mode": container.operational_mode,
+        },
+        "items": [
+            {
+                "sku": item.sku,
+                "dimensions_mm": item.dimensions_mm,
+                "carton_weight_kg": item.carton_weight_kg,
+                "min_quantity": item.min_quantity,
+                "max_quantity": item.max_quantity,
+                "quantity_step": item.quantity_step,
+                "loading_stage": item.effective_loading_stage,
+            }
+            for item in items
+        ],
+        "options": effective_options,
+    }
+    serialized = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    build_version = (
+        os.getenv("RAILWAY_GIT_COMMIT_SHA")
+        or os.getenv("GIT_COMMIT_SHA")
+        or os.getenv("COMMIT_SHA")
+        or "unknown"
+    )
+    return {
+        "algorithm": "v0.4-stack-scan-lookahead",
+        "build_version": build_version,
+        "input_fingerprint": hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16],
+        "effective_options": effective_options,
+        "portfolio_scope": portfolio.scope,
+        "fixed_candidates": portfolio.fixed_candidates,
+        "expanded_candidates": portfolio.expanded_candidates,
+        "cp_sat_selected": portfolio.selected_by_cp_sat,
+    }
 
 
 def _state_signature(state, items):
@@ -195,6 +250,19 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
     time_limit = max(1.0, float(options.get("time_limit_seconds", 300.0)))
     deadline = started+time_limit
     lns_rounds = max(0, int(options.get("lns_rounds", 6)))
+    fixed_max_blocks = max(1, int(options.get("fixed_max_blocks_per_sku", 6)))
+    portfolio_limit = max(2, int(options.get("stage_portfolio_limit", 6)))
+    effective_options = {
+        "beam_width": beam_width,
+        "max_block_placements": max_placements,
+        "solution_limit": solution_limit,
+        "time_limit_seconds": time_limit,
+        "lns_rounds": lns_rounds,
+        "max_blocks_per_sku": int(options.get("max_blocks_per_sku", 140)),
+        "fixed_max_blocks_per_sku": fixed_max_blocks,
+        "stage_portfolio_limit": portfolio_limit,
+        "min_support_ratio": min_support_ratio,
+    }
 
     validate_quantity_plan(items)
     cp_candidate, cp_upper, cp_proven = quantity_search_info(items, container)
@@ -210,7 +278,7 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
         validation["valid"] = validation["valid"] and validation["sequence_valid"]
         return validation["valid"]
 
-    portfolio_states, portfolio = staged_portfolio_search(
+    portfolio_states, portfolio = stack_scan_search(
         container, items,
         beam_width=beam_width,
         max_block_placements=max_placements,
@@ -218,8 +286,8 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
         solution_limit=solution_limit,
         deadline=deadline,
         max_blocks_per_sku=int(options.get("max_blocks_per_sku", 140)),
-        fixed_max_blocks_per_sku=max(1, int(options.get("fixed_max_blocks_per_sku", 6))),
-        portfolio_limit=max(2, int(options.get("stage_portfolio_limit", 6))),
+        fixed_max_blocks_per_sku=fixed_max_blocks,
+        portfolio_limit=portfolio_limit,
     )
     selected_states = []
     for state in portfolio_states:
@@ -239,9 +307,10 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
         )
 
     auto_item = next((item for item in items if item.is_auto_fill), None)
-    auto_upper = cp_candidate.get(auto_item.sku) if auto_item else None
+    auto_upper = auto_fill_quantity_upper_bound(items, container)
     seed_volume = max((state.volume for state in selected_states), default=0.0)
     solution_status = "PORTFOLIO_OPTIMAL" if portfolio.selected_by_cp_sat else "BEST_FOUND"
+    audit = _audit_context(container, items, effective_options, portfolio)
     results = []
     for index, state in enumerate(selected_states, 1):
         _, preview_blocks = _expand_state(state, items, container)
@@ -260,6 +329,7 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
             upper_bound_proven=False,
             auto_fill_upper_quantity=auto_upper,
             portfolio_candidates=portfolio.expanded_candidates,
+            audit={**audit, "selected_candidate_rank": index + 1},
         )
         if result.validation["valid"]:
             results.append(result)

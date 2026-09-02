@@ -1,3 +1,5 @@
+from typing import Any
+
 from pydantic import BaseModel, Field
 from .block import Block
 from .placement import Placement
@@ -34,9 +36,9 @@ class OptimizationResult(BaseModel):
     auto_fill_upper_quantity: int | None = None
     auto_fill_gap_boxes: int | None = None
     portfolio_candidates: int = 0
+    audit: dict[str, Any] = Field(default_factory=dict)
     validation: dict[str, bool] = Field(default_factory=dict)
     solve_time_seconds: float = 0.0
     initial_seed_cbm: float = 0.0
     search_improvement_cbm: float = 0.0
     alternatives: list[dict] = Field(default_factory=list)
-
