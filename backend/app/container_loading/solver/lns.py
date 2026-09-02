@@ -22,7 +22,9 @@ def destroy_states(state, items, container, mode, max_variants=8):
     """Create deterministic large neighbourhoods for destroy-and-repair."""
     if len(state.blocks) < 2:
         return []
-    realistic = mode == "SEQUENCE_REALISTIC_MAX"
+    # Legacy mode names are retained by the API, but the first version uses
+    # the same staged physical loading model for every result.
+    realistic = True
     variants = []
     if realistic:
         # Only destroy a loading-sequence suffix; earlier frozen cargo remains
@@ -53,5 +55,4 @@ def destroy_states(state, items, container, mode, max_variants=8):
         if len(unique) >= max_variants:
             break
     return list(unique.values())
-
 

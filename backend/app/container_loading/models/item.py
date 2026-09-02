@@ -21,13 +21,18 @@ class Item(BaseModel):
     fragile: bool = False
     @model_validator(mode="after")
     def validate_quantities(self):
-        if self.max_quantity is not None and self.max_quantity < self.min_quantity:
-            raise ValueError("max_quantity must be >= min_quantity")
-        if self.max_quantity is not None:
-            first_legal = ((self.min_quantity + self.quantity_step - 1) // self.quantity_step) * self.quantity_step
-            if first_legal > self.max_quantity:
-                raise ValueError("quantity range contains no value compatible with quantity_step")
+        if self.max_quantity is None:
+            if self.min_quantity != 0:
+                raise ValueError("自动填充商品的最低数量必须为 0")
+        elif self.max_quantity != self.min_quantity:
+            raise ValueError("第一版只支持固定数量或自动填充，不支持数量范围")
+        elif self.min_quantity % self.quantity_step:
+            raise ValueError("固定数量必须符合整箱步长")
         return self
+
+    @property
+    def is_auto_fill(self) -> bool:
+        return self.max_quantity is None
 
     @property
     def effective_loading_stage(self) -> int:
@@ -40,5 +45,4 @@ class Item(BaseModel):
     @property
     def volume_m3(self) -> float:
         return self.carton_length_cm * self.carton_width_cm * self.carton_height_cm / 1_000_000
-
 

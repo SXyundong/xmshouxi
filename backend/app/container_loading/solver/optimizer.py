@@ -17,7 +17,7 @@ from .block_generator import generate_blocks
 from .constraints import validate_solution
 from .lns import destroy_states
 from .maximal_spaces import spaces_after_blocks
-from .quantity_optimizer import legal_max_quantity, quantity_is_valid, quantity_search_info
+from .quantity_optimizer import legal_max_quantity, quantity_is_valid, quantity_search_info, validate_quantity_plan
 
 
 SUPPORTED_MODES = {"THEORETICAL_MAX", "SEQUENCE_REALISTIC_MAX"}
@@ -27,7 +27,7 @@ def _ordered_state(state, items, container, realistic):
     if not realistic:
         return state
     stages = {item.sku: item.effective_loading_stage for item in items}
-    state.blocks = sorted(state.blocks, key=lambda entry: stages[entry[0]["sku"]])
+    state.blocks = sorted(state.blocks, key=lambda entry: (stages[entry[0]["sku"]], entry[1][0], entry[1][1], entry[1][2]))
     state.empty_spaces = spaces_after_blocks(container, state.blocks)
     state.stage_index = max(0, len(set(stages.values()))-1)
     return state
@@ -80,15 +80,14 @@ def _partial_cross_section(blocks, container):
 
 def _result_from_state(state, container, items, mode, upper, min_support_ratio, started,
                        solution_id, solution_name, seed_volume, locally_maximal, upper_bound_proven=True):
-    realistic = mode == "SEQUENCE_REALISTIC_MAX"
+    # Keep the legacy mode labels for API/UI compatibility.  The first
+    # version uses one staged, physically executable planning model for both.
+    realistic = True
     placements, blocks = _expand_state(state, items, container)
     validation, quantities, _ = validate_solution(placements, container, items, mode, min_support_ratio)
     validation["cross_sku_x_overlap"] = _cross_sku_x_overlap(blocks)
     validation["partial_cross_section_blocks"] = _partial_cross_section(blocks, container)
-    if realistic:
-        validation.update(validate_accessibility(placements, container))
-    else:
-        validation.update({"factory_sequence_valid": True, "accessibility_valid": True, "sequence_valid": True})
+    validation.update(validate_accessibility(placements, container))
     validation["locally_maximal"] = locally_maximal
     validation["valid"] = validation["valid"] and validation["sequence_valid"] and locally_maximal
 
@@ -97,7 +96,7 @@ def _result_from_state(state, container, items, mode, upper, min_support_ratio, 
     gap = max(0.0, (upper-loaded_cbm)/upper*100) if upper else 0.0
     status = "PROVEN_OPTIMAL" if gap <= 1e-9 else "BEST_FOUND"
     return OptimizationResult(
-        solution_id=solution_id, solution_name=solution_name, mode=mode, mix_policy="MIN_MAX",
+        solution_id=solution_id, solution_name=solution_name, mode=mode, mix_policy="FIXED_LAST_STAGE_AUTO",
         clearance_mm=getattr(container, "clearance_mm", 0.0),
         solution_status=status, locally_maximal=locally_maximal, loaded_cbm=round(loaded_cbm, 6),
         physical_utilization=loaded_cbm/container.physical_cbm,
@@ -170,7 +169,9 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
     if len({item.sku for item in items}) != len(items):
         raise ValueError("SKU identifiers must be unique")
     started = time.perf_counter()
-    realistic = mode == "SEQUENCE_REALISTIC_MAX"
+    # Legacy mode names are retained for compatibility; both use the unified
+    # staged physical loading model in the first version.
+    realistic = True
     min_support_ratio = float(options.get("min_support_ratio", 0.8))
     beam_width = int(options.get("beam_width", 18))
     max_placements = int(options.get("max_block_placements", 48))
@@ -179,6 +180,7 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
     deadline = started+time_limit
     lns_rounds = max(0, int(options.get("lns_rounds", 6)))
 
+    validate_quantity_plan(items)
     cp_candidate, cp_upper, cp_proven = quantity_search_info(items, container)
     if not cp_candidate:
         raise ValueError("minimum quantities violate volume or payload constraints")
@@ -240,9 +242,8 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
     def state_is_fully_valid(state):
         placements, _ = _expand_state(state, items, container)
         validation, _, _ = validate_solution(placements, container, items, mode, min_support_ratio)
-        if realistic:
-            validation.update(validate_accessibility(placements, container))
-            validation["valid"] = validation["valid"] and validation["sequence_valid"]
+        validation.update(validate_accessibility(placements, container))
+        validation["valid"] = validation["valid"] and validation["sequence_valid"]
         return validation["valid"]
 
     # Completion is a mandatory contract, not an optional heuristic. Complete
@@ -336,5 +337,3 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
     best.alternatives = [candidate.model_dump(exclude={"alternatives"}) for candidate in results[1:]]
     best.solve_time_seconds = round(time.perf_counter()-started, 4)
     return best
-
-

@@ -212,6 +212,33 @@ def _placed_rectangles(state):
             for block, (x, y, z) in state.blocks]
 
 
+def _stage_x_bounds(state, item, container, all_items):
+    """Return the current stage's allowed X band.
+
+    Earlier stages occupy the head-side part of the container.  A stage may
+    widen across Y/Z at its current X frontier, then advance that frontier;
+    it cannot jump over an empty longitudinal gap.  This keeps a factory's
+    cargo compact while preserving the existing EMS geometry search.
+    """
+    stage = item.effective_loading_stage
+    clearance = getattr(container, "clearance_mm_int", 0)
+    stage_by_sku = {candidate.sku: candidate.effective_loading_stage for candidate in all_items}
+    previous = [
+        (block, position)
+        for block, position in state.blocks
+        if stage_by_sku.get(block["sku"], stage) < stage
+    ]
+    previous_end = max((position[0] + block["length"] for block, position in previous), default=0)
+    stage_start = previous_end + (clearance if previous else 0)
+    current = [
+        (block, position)
+        for block, position in state.blocks
+        if stage_by_sku.get(block["sku"], stage) == stage
+    ]
+    frontier = max((position[0] + block["length"] for block, position in current), default=stage_start)
+    return stage_start, frontier
+
+
 def _positions(space, block, occupied=None, exhaustive=False):
     if block["length"] > space.length or block["width"] > space.width or block["height"] > space.height:
         return []
@@ -253,7 +280,7 @@ def _door_accepts_block(block, item, container):
 
 
 def _moves(state, eligible_items, quantity, container, min_support_ratio, limit, realistic=False,
-           filler_only=False):
+           filler_only=False, all_items=None):
     occupied = _placed_rectangles(state)
     moves = []
     for space in state.empty_spaces:
@@ -270,6 +297,10 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
                 if realistic and not _door_accepts_block(block, item, container):
                     continue
                 for x, y, z in _positions(space, block, occupied, filler_only):
+                    if realistic:
+                        stage_start, frontier = _stage_x_bounds(state, item, container, all_items or eligible_items)
+                        if x < stage_start or x > frontier + getattr(container, "clearance_mm_int", 0):
+                            continue
                     if not within(x, y, z, block["length"], block["width"], block["height"], container):
                         continue
                     probe = Rect3D(x, y, z, block["length"], block["width"], block["height"])
@@ -284,7 +315,20 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
                     leftover = space.volume - block["length"]*block["width"]*block["height"]
                     contact = int(x == 0) + int(y == 0) + int(z == 0)
                     moves.append((block, (x, y, z), leftover, contact))
-    moves.sort(key=lambda move: (move[0]["volume_m3"], move[3], -move[2]), reverse=True)
+    if realistic:
+        # Within one loading stage, use the width/height cross-section before
+        # extending the cargo band along the container length.
+        moves.sort(key=lambda move: (
+            move[0]["width"] * move[0]["height"],
+            move[0]["width"],
+            -move[1][0],
+            -move[1][1],
+            move[0]["volume_m3"],
+            move[3],
+            -move[2],
+        ), reverse=True)
+    else:
+        moves.sort(key=lambda move: (move[0]["volume_m3"], move[3], -move[2]), reverse=True)
     chosen, seen_skus = [], set()
     for move in moves:
         if move[0]["sku"] not in seen_skus:
@@ -364,7 +408,10 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
     `quantity` is a per-SKU ceiling. The returned final quantities are decided
     by feasible 3D placements and need not equal that ceiling.
     """
-    realistic = mode == "SEQUENCE_REALISTIC_MAX"
+    # The first-version tool has one unified staged loading model.  Keep the
+    # legacy mode labels for API/UI compatibility, but both use the same
+    # physically executable sequence rules.
+    realistic = True
     all_stages = sorted({item.effective_loading_stage for item in items}) if realistic else [1]
     item_by_sku = {item.sku: item for item in items}
     _state_score.container = container
@@ -395,14 +442,14 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
                                                volume=state.volume, weight=state.weight, stage_index=state.stage_index+1)
                     transitioned.score = _state_score(transitioned, items, all_stages, realistic)
                     next_states.append(transitioned)
-                eligible_items = stage_items
-            else:
-                deficits = [item for item in items if state.counts.get(item.sku, 0) < legal_min_quantity(item)]
-                eligible_items = deficits or items
-
+                stage_deficits = [
+                    item for item in stage_items
+                    if state.counts.get(item.sku, 0) < legal_min_quantity(item)
+                ]
+                eligible_items = stage_deficits or stage_items
             for block, (x, y, z), _, _ in _moves(
                     state, eligible_items, quantity, container, min_support_ratio,
-                    max(48, beam_width*6), realistic):
+                    max(48, beam_width*6), realistic, all_items=items):
                 if state.weight + block["weight_kg"] > container.max_payload + 1e-9:
                     continue
                 if state.volume + block["volume_m3"] > hard_limit + 1e-9:
@@ -443,7 +490,7 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
 def complete_state(state, items, quantity, container, min_support_ratio=0.8,
                    mode="THEORETICAL_MAX", max_additions=500, move_validator=None):
     """Greedily fill every remaining EMS with legal small blocks until stable."""
-    realistic = mode == "SEQUENCE_REALISTIC_MAX"
+    realistic = True
     item_by_sku = {item.sku: item for item in items}
     completed = SearchState(
         blocks=list(state.blocks), counts=state.counts.copy(), empty_spaces=list(state.empty_spaces),
@@ -462,7 +509,8 @@ def complete_state(state, items, quantity, container, min_support_ratio=0.8,
         if not eligible_items:
             break
         moves = _moves(completed, eligible_items, quantity, container, min_support_ratio,
-                       limit=max(4096, len(eligible_items)*1024), realistic=realistic, filler_only=True)
+                       limit=max(4096, len(eligible_items)*1024), realistic=realistic, filler_only=True,
+                       all_items=items)
         legal_moves = []
         for move in moves:
             block = move[0]
@@ -505,5 +553,3 @@ def beam_pack(items, quantity, container, block_defs, beam_width=24, max_block_p
                                     max_block_placements, min_support_ratio, initial_states, mode, 1)
     return solutions[0] if solutions else SearchState(
         counts={item.sku: 0 for item in items}, empty_spaces=initial_space(container))
-
-

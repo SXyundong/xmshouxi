@@ -1,6 +1,19 @@
 from __future__ import annotations
 
 
+def validate_quantity_plan(items) -> None:
+    """Validate the first-version fixed/last-stage-auto quantity contract."""
+    auto_items = [item for item in items if item.is_auto_fill]
+    if len(auto_items) > 1:
+        raise ValueError("第一版只能设置一个自动填充商品")
+    if any(item.max_quantity is not None and item.max_quantity != item.min_quantity for item in items):
+        raise ValueError("第一版只支持固定数量或自动填充，不支持数量范围")
+    if auto_items:
+        highest_stage = max(item.effective_loading_stage for item in items)
+        if auto_items[0].effective_loading_stage != highest_stage:
+            raise ValueError("自动填充商品必须属于最后一个装载顺序")
+
+
 def safe_max_quantity(item, container) -> int:
     volume_bound = int(container.physical_cbm / item.volume_m3) if item.volume_m3 else 0
     weight_bound = int(container.max_payload / item.carton_weight_kg) if item.carton_weight_kg else volume_bound
@@ -8,7 +21,7 @@ def safe_max_quantity(item, container) -> int:
 
 
 def legal_min_quantity(item) -> int:
-    return ((item.min_quantity + item.quantity_step - 1) // item.quantity_step) * item.quantity_step
+    return item.min_quantity
 
 
 def legal_max_quantity(item, container) -> int:
@@ -34,6 +47,7 @@ def quantity_is_valid(quantity, items, container) -> bool:
 
 def quantity_search_info(items, container) -> tuple[dict[str, int], float, bool]:
     """Return a CP quantity candidate, a proven relaxation bound, and proof flag."""
+    validate_quantity_plan(items)
     maxima = {item.sku: legal_max_quantity(item, container) for item in items}
     try:
         from ortools.sat.python import cp_model
@@ -94,5 +108,4 @@ def quantity_candidates(items, container, limit=40, **_ignored):
         if len(unique) >= limit:
             break
     return unique
-
 

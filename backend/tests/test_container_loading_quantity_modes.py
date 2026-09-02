@@ -1,0 +1,40 @@
+import pytest
+
+from app.container_loading.models.item import Item
+from app.container_loading.solver.quantity_optimizer import validate_quantity_plan
+
+
+def _item(sku, *, minimum=0, maximum=None, stage=1):
+    return Item(
+        sku=sku,
+        carton_length_cm=10,
+        carton_width_cm=10,
+        carton_height_cm=10,
+        carton_weight_kg=1,
+        min_quantity=minimum,
+        max_quantity=maximum,
+        loading_stage=stage,
+    )
+
+
+def test_fixed_and_last_stage_auto_plan_is_valid():
+    fixed = _item("A", minimum=2, maximum=2, stage=1)
+    auto = _item("B", stage=2)
+
+    validate_quantity_plan([fixed, auto])
+
+
+def test_quantity_range_is_rejected():
+    with pytest.raises(ValueError, match="不支持数量范围"):
+        _item("A", minimum=1, maximum=2)
+
+
+def test_auto_fill_must_be_the_last_stage_and_unique():
+    fixed = _item("A", minimum=1, maximum=1, stage=2)
+    earlier_auto = _item("B", stage=1)
+    with pytest.raises(ValueError, match="最后一个装载顺序"):
+        validate_quantity_plan([fixed, earlier_auto])
+
+    later_auto = _item("C", stage=2)
+    with pytest.raises(ValueError, match="只能设置一个自动填充商品"):
+        validate_quantity_plan([fixed, later_auto, _item("D", stage=2)])

@@ -85,6 +85,25 @@ def _door_validation(placements, container):
                for placement in placements)
 
 
+def _stage_layout_validation(placements, items, container):
+    """Ensure factory stages occupy consecutive head-to-door X bands."""
+    if not placements:
+        return True
+    item_by_sku = {item.sku: item for item in items}
+    by_stage = defaultdict(list)
+    for placement in placements:
+        by_stage[item_by_sku[placement.sku].effective_loading_stage].append(placement)
+    clearance = getattr(container, "clearance_mm_int", 0)
+    previous_end = 0
+    for stage in sorted(by_stage):
+        current = by_stage[stage]
+        current_start = min(placement.x for placement in current)
+        if current_start < previous_end:
+            return False
+        previous_end = max(placement.x + placement.length for placement in current) + clearance
+    return True
+
+
 def validate_solution(placements, container, items, mode, min_support_ratio=0.8):
     """Independent carton-level validation; never trusts the search state."""
     item_by_sku = {item.sku: item for item in items}
@@ -102,8 +121,11 @@ def validate_solution(placements, container, items, mode, min_support_ratio=0.8)
         quantities[placement.sku] += 1
     quantity_ok = quantity_is_valid(quantities, items, container)
     stack_limit_ok, top_load_ok, fragile_ok, top_load = _stack_and_load_validation(placements, item_by_sku)
-    realistic = mode == "SEQUENCE_REALISTIC_MAX"
+    # Both legacy result labels now represent the same physically executable
+    # staged model.
+    realistic = True
     door_ok = _door_validation(placements, container) if realistic else True
+    stage_layout_ok = _stage_layout_validation(placements, items, container)
     validation = {
         "no_overlap": no_overlap,
         "within_container": in_bounds,
@@ -115,8 +137,7 @@ def validate_solution(placements, container, items, mode, min_support_ratio=0.8)
         "stack_limit_valid": stack_limit_ok,
         "top_load_valid": top_load_ok,
         "fragile_valid": fragile_ok,
+        "stage_layout_valid": stage_layout_ok,
     }
     validation["valid"] = all(validation.values())
     return validation, quantities, top_load
-
-

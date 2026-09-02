@@ -31,8 +31,11 @@ class ContainerLoadingItemRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_range(self):
-        if self.max_quantity is not None and self.max_quantity < self.min_quantity:
-            raise ValueError("最高整箱数不能小于最低整箱数")
+        if self.max_quantity is None:
+            if self.min_quantity != 0:
+                raise ValueError("自动填充商品的最低整箱数必须为 0")
+        elif self.max_quantity != self.min_quantity:
+            raise ValueError("第一版只支持固定数量或自动填充，不支持数量范围；固定数量请将最低和最高设为相同值")
         return self
 
 
