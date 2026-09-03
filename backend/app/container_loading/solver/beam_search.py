@@ -220,6 +220,38 @@ def _placed_rectangles(state):
             for block, (x, y, z) in state.blocks]
 
 
+def _loading_order_key(block, position, item_by_sku):
+    """Canonical physical loading order for a placed block.
+
+    The door is at the high-X end of the container, so cargo farther inside
+    the container has to be loaded first.  At the same X coordinate, a lower
+    block must be loaded before any block that it supports.  Search states can
+    be assembled in a different order; using that construction order for the
+    aisle check would incorrectly let future, door-side cargo block an earlier
+    placement.
+    """
+    x, y, z = position
+    item = item_by_sku[block["sku"]]
+    return item.effective_loading_stage, x, z, y
+
+
+def _previous_rectangles_for_move(state, item, position, all_items):
+    """Return only cargo that is loaded before a proposed placement.
+
+    Geometry still checks against every placed block.  Support and door-path
+    checks, however, must see the executable loading sequence rather than the
+    arbitrary order in which the search happened to discover the blocks.
+    """
+    item_by_sku = {candidate.sku: candidate for candidate in all_items}
+    candidate_key = (item.effective_loading_stage, position[0], position[2], position[1])
+    previous = []
+    for block, existing_position in state.blocks:
+        if _loading_order_key(block, existing_position, item_by_sku) < candidate_key:
+            x, y, z = existing_position
+            previous.append(Rect3D(x, y, z, block["length"], block["width"], block["height"]))
+    return previous
+
+
 def _stage_x_bounds(state, item, container, all_items):
     """Return the current stage's allowed X band.
 
@@ -348,10 +380,13 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
                     if any(overlaps(probe, existing, getattr(container, "clearance_mm_int", 0))
                            for existing in occupied):
                         continue
-                    if support_ratio(x, y, z, block["length"], block["width"], occupied) + 1e-9 < support_threshold:
+                    previous = _previous_rectangles_for_move(
+                        state, item, (x, y, z), all_items or eligible_items,
+                    )
+                    if support_ratio(x, y, z, block["length"], block["width"], previous) + 1e-9 < support_threshold:
                         continue
                     if realistic and not swept_path_clear(x, y, z, block["length"], block["width"],
-                                                           block["height"], occupied, container):
+                                                           block["height"], previous, container):
                         continue
                     leftover = space.volume - block["length"]*block["width"]*block["height"]
                     contact = int(x == 0) + int(y == 0) + int(z == 0)

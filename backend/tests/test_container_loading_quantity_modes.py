@@ -2,8 +2,8 @@ import pytest
 
 from app.container_loading.models.container import Container
 from app.container_loading.models.item import Item
-from app.container_loading.solver.beam_search import Rect3D, SearchState, _positions
-from app.container_loading.solver.maximal_spaces import EmptySpace
+from app.container_loading.solver.beam_search import Rect3D, SearchState, _moves, _positions
+from app.container_loading.solver.maximal_spaces import EmptySpace, spaces_after_blocks
 from app.container_loading.solver.optimizer import optimize_container
 from app.container_loading.solver.quantity_optimizer import validate_quantity_plan
 from app.container_loading.solver.quantity_optimizer import auto_fill_quantity_upper_bound
@@ -203,3 +203,61 @@ def test_exhaustive_contact_positions_include_configured_clearance():
     assert (6845, 1625, 2230) not in normal
     assert (6845, 1625, 2230) in exhaustive
     assert (6840, 1625, 2230) not in exhaustive
+
+
+def test_auto_fill_can_be_inserted_before_future_door_side_cargo():
+    """A deeper carton must not be blocked by cargo loaded later near the door."""
+    container = Container(clearance_mm=5)
+    support = Item(
+        sku="B", carton_length_cm=97, carton_width_cm=31, carton_height_cm=18,
+        carton_weight_kg=10.45, min_quantity=100, max_quantity=100, loading_stage=1,
+    )
+    auto = Item(
+        sku="D", carton_length_cm=88, carton_width_cm=32, carton_height_cm=29,
+        carton_weight_kg=16.2, min_quantity=0, max_quantity=None, loading_stage=1,
+    )
+    support_block = {
+        "sku": "B", "nx": 25, "ny": 2, "nz": 2, "box_count": 100,
+        "length": 7870, "width": 365, "height": 1940,
+        "unit_length": 320, "unit_width": 290, "unit_height": 880,
+        "orientation": 3, "weight_kg": 1045, "volume_m3": 5.413,
+    }
+    stacked_block = {
+        "sku": "D", "nx": 5, "ny": 1, "nz": 2, "box_count": 10,
+        "length": 4420, "width": 320, "height": 580,
+        "unit_length": 880, "unit_width": 320, "unit_height": 290,
+        "orientation": 0, "weight_kg": 162, "volume_m3": 0.0,
+    }
+    future_door_block = {
+        "sku": "D", "nx": 1, "ny": 1, "nz": 3, "box_count": 3,
+        "length": 290, "width": 320, "height": 2640,
+        "unit_length": 290, "unit_width": 320, "unit_height": 880,
+        "orientation": 5, "weight_kg": 48.6, "volume_m3": 0.0,
+    }
+    blocks = [
+        (support_block, (2420, 1625, 0)),
+        (stacked_block, (2420, 1625, 1940)),
+        # This cargo is closer to the door and must be loaded after the
+        # candidate at x=6845; it may not block that candidate's aisle.
+        (future_door_block, (10295, 1625, 0)),
+    ]
+    state = SearchState(
+        blocks=blocks,
+        counts={"B": 100, "D": 13},
+        empty_spaces=spaces_after_blocks(container, blocks),
+        volume=0.0,
+        weight=0.0,
+        stage_index=0,
+    )
+
+    moves = _moves(
+        state, [auto], {"B": 100, "D": 9999}, container, 1.0, 10000,
+        realistic=True, filler_only=True, all_items=[support, auto], exhaustive=True,
+    )
+
+    assert any(
+        position == (6845, 1625, 1940)
+        and block["orientation"] == 0
+        and block["box_count"] == 1
+        for block, position, _, _ in moves
+    )

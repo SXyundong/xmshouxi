@@ -1,4 +1,4 @@
-"""v0.4 stack-style staged search.
+"""v0.5 sequence-aware stack-style staged search.
 
 Fixed-stage layouts are generated as cross-section patterns first. Each
 pattern is then tested with a small supported top seed before the existing

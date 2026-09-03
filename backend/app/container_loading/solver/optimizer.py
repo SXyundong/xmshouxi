@@ -37,7 +37,14 @@ def _ordered_state(state, items, container, realistic):
     if not realistic:
         return state
     stages = {item.sku: item.effective_loading_stage for item in items}
-    state.blocks = sorted(state.blocks, key=lambda entry: (stages[entry[0]["sku"]], entry[1][0], entry[1][1], entry[1][2]))
+    # The door is at the high-X end.  Make the published loading sequence
+    # match the physical insertion order used by the solver: deep cargo first,
+    # then the cargo closer to the door; lower boxes precede boxes stacked on
+    # top at the same X coordinate.
+    state.blocks = sorted(
+        state.blocks,
+        key=lambda entry: (stages[entry[0]["sku"]], entry[1][0], entry[1][2], entry[1][1]),
+    )
     state.empty_spaces = spaces_after_blocks(container, state.blocks)
     state.stage_index = max(0, len(set(stages.values()))-1)
     return state
@@ -175,7 +182,7 @@ def _audit_context(container, items, effective_options, portfolio) -> dict:
         or "unknown"
     )
     return {
-        "algorithm": "v0.4-stack-scan-lookahead",
+        "algorithm": "v0.5-sequence-aware-stack-scan",
         "build_version": build_version,
         "input_fingerprint": hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16],
         "effective_options": effective_options,
@@ -291,8 +298,9 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
     )
     selected_states = []
     for state in portfolio_states:
-        if state_is_fully_valid(state):
-            selected_states.append(state)
+        ordered_state = _ordered_state(state, items, container, realistic)
+        if state_is_fully_valid(ordered_state):
+            selected_states.append(ordered_state)
         if len(selected_states) >= solution_limit:
             break
     if not selected_states:
