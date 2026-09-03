@@ -133,3 +133,14 @@ def job_status(request: Request, job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail="装柜任务不存在或无权访问")
     return _job_response(job)
+
+
+@router.get("/runs/{job_id}")
+def persisted_run(request: Request, job_id: str):
+    """Return the durable calculation snapshot for later diagnostics."""
+    identity = current_identity(request)
+    audit = container_loading_jobs.audit(job_id, identity["open_id"])
+    if audit is None:
+        raise HTTPException(status_code=404, detail="装柜计算记录不存在或无权访问")
+    audit.pop("owner_open_id", None)
+    return audit

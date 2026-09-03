@@ -6,6 +6,7 @@ from sqlalchemy import engine_from_config, pool
 from app.config import settings
 from app.db.base import Base
 from app.db import models  # noqa: F401 - registers ORM metadata
+from app.db import container_loading_models  # noqa: F401 - registers audit metadata
 
 config = context.config
 if config.config_file_name is not None:
