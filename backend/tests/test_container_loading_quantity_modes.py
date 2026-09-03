@@ -2,7 +2,8 @@ import pytest
 
 from app.container_loading.models.container import Container
 from app.container_loading.models.item import Item
-from app.container_loading.solver.beam_search import SearchState
+from app.container_loading.solver.beam_search import Rect3D, SearchState, _positions
+from app.container_loading.solver.maximal_spaces import EmptySpace
 from app.container_loading.solver.optimizer import optimize_container
 from app.container_loading.solver.quantity_optimizer import validate_quantity_plan
 from app.container_loading.solver.quantity_optimizer import auto_fill_quantity_upper_bound
@@ -188,3 +189,17 @@ def test_realistic_5mm_stage_mosaic_keeps_top_and_side_fill():
     assert result.sku_quantities["70047"] == 100
     assert result.sku_quantities["70051-A"] == 150
     assert result.sku_quantities["70051-D"] >= 436
+    assert result.validation["locally_maximal"] is True
+
+
+def test_exhaustive_contact_positions_include_configured_clearance():
+    space = EmptySpace(0, 0, 2230, 10000, 2352, 460)
+    block = {"length": 880, "width": 320, "height": 290}
+    occupied = [Rect3D(5960, 1625, 2230, 880, 320, 290)]
+
+    normal = _positions(space, block, occupied, False, clearance_mm=5)
+    exhaustive = _positions(space, block, occupied, True, clearance_mm=5)
+
+    assert (6845, 1625, 2230) not in normal
+    assert (6845, 1625, 2230) in exhaustive
+    assert (6840, 1625, 2230) not in exhaustive

@@ -311,6 +311,18 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
     seed_volume = max((state.volume for state in selected_states), default=0.0)
     solution_status = "PORTFOLIO_OPTIMAL" if portfolio.selected_by_cp_sat else "BEST_FOUND"
     audit = _audit_context(container, items, effective_options, portfolio)
+
+    def state_is_locally_maximal(state):
+        """Confirm the returned AUTO layout has no legal one-step addition."""
+        if auto_item is None:
+            return True
+        ceilings = {item.sku: legal_max_quantity(item, container) for item in items}
+        probe, additions = complete_state(
+            state, items, ceilings, container, min_support_ratio,
+            mode="UNIFIED_STAGE_MAX", max_additions=1,
+        )
+        return additions == 0 and probe.counts.get(auto_item.sku, 0) == state.counts.get(auto_item.sku, 0)
+
     results = []
     for index, state in enumerate(selected_states, 1):
         _, preview_blocks = _expand_state(state, items, container)
@@ -323,7 +335,7 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
             name = f"候选方案 {index}"
         result = _result_from_state(
             state, container, items, mode, upper, min_support_ratio, started,
-            f"{mode}-{index}", name, seed_volume, False,
+            f"{mode}-{index}", name, seed_volume, state_is_locally_maximal(state),
             solution_status=solution_status,
             optimization_scope=portfolio.scope,
             upper_bound_proven=False,

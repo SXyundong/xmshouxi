@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import time
 
-from .beam_search import SearchState, beam_pack_solutions
+from .beam_search import SearchState, beam_pack_solutions, complete_state
 from .maximal_spaces import initial_space
 from .quantity_optimizer import legal_max_quantity
 from .stage_portfolio import (
@@ -69,20 +69,53 @@ def stack_scan_search(container, items: list, *, beam_width: int, max_block_plac
 
     expanded = []
     ceilings = {item.sku: legal_max_quantity(item, container) for item in items}
+    # Keep a small, explicit budget for the correctness pass below.  The beam
+    # is a discovery search; it must not consume the entire job deadline and
+    # leave no time to enumerate the final carton-level gaps.
+    search_deadline = deadline
+    if deadline is not None:
+        remaining = max(0.0, deadline-time.perf_counter())
+        completion_reserve = min(20.0, max(0.5, remaining*0.2))
+        search_deadline = deadline-completion_reserve
     for index, seed in enumerate(seeds):
-        if deadline is not None and time.perf_counter() >= deadline:
+        if search_deadline is not None and time.perf_counter() >= search_deadline:
             break
-        remaining = max(0.0, deadline-time.perf_counter()) if deadline is not None else 30.0
+        remaining = max(0.0, search_deadline-time.perf_counter()) if search_deadline is not None else 30.0
         seeds_left = max(1, len(seeds)-index)
-        seed_deadline = None if deadline is None else min(
-            deadline, time.perf_counter() + max(0.75, remaining / seeds_left)
+        seed_deadline = None if search_deadline is None else min(
+            search_deadline, time.perf_counter() + max(0.75, remaining / seeds_left)
         )
-        expanded.extend(beam_pack_solutions(
+        beam_states = beam_pack_solutions(
             items, ceilings, container, [],
             max(beam_width, 32), max_block_placements, min_support_ratio,
             [seed], "UNIFIED_STAGE_MAX",
             archive_limit=max(6, solution_limit * 4), deadline=seed_deadline,
-        ))
+        )
+        expanded.extend(beam_states)
+
+    # The beam intentionally explores a bounded set of promising layouts. It
+    # is not a proof that the last AUTO SKU is saturated. Run a deterministic
+    # exhaustive-contact completion over the strongest discovered states so a
+    # legal side/top carton is not lost merely because it was not a beam move.
+    if auto_item is not None and expanded:
+        completion_candidates = sorted(
+            expanded,
+            key=lambda value: (
+                value.counts.get(auto_item.sku, 0),
+                value.volume,
+                -len(value.blocks),
+            ),
+            reverse=True,
+        )[:max(24, solution_limit * 12)]
+        for candidate in completion_candidates:
+            if deadline is not None and time.perf_counter() >= deadline:
+                break
+            completed, _ = complete_state(
+                candidate, items, ceilings, container, min_support_ratio,
+                mode="UNIFIED_STAGE_MAX", max_additions=500,
+                deadline=deadline,
+            )
+            expanded.append(completed)
 
     unique = {}
     for state in sorted(

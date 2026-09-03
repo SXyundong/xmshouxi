@@ -156,7 +156,11 @@ def generate_blocks_for_space(item, space, remaining: int, max_candidates: int =
         )
         count_triples = {(nx, ny, nz) for nx in x_values for ny in y_values for nz in z_values}
         count_triples.update(cross_section_counts)
-        for nx, ny, nz in count_triples:
+        # ``count_triples`` is a set assembled from sampled axis counts and
+        # exact cross-section counts.  Iterating it directly makes candidate
+        # order depend on hash randomisation, which changes beam pruning and
+        # can produce different quantities for identical inputs.
+        for nx, ny, nz in sorted(count_triples):
             count = nx*ny*nz
             if count > remaining or (filler_only and count > 16):
                 continue

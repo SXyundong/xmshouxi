@@ -243,18 +243,40 @@ def _stage_x_bounds(state, item, container, all_items):
     return stage_start, frontier
 
 
-def _positions(space, block, occupied=None, exhaustive=False):
+def _positions(space, block, occupied=None, exhaustive=False, clearance_mm=0):
     if block["length"] > space.length or block["width"] > space.width or block["height"] > space.height:
         return []
     xs = {space.x, space.x + space.length - block["length"]}
     ys = {space.y, space.y + space.width - block["width"]}
+    zs = {space.z}
+    clearance = max(0, round(float(clearance_mm)))
     if exhaustive and occupied:
         for placed in occupied:
-            xs.update((placed.x+placed.length, placed.x-block["length"]))
-            ys.update((placed.y+placed.width, placed.y-block["width"]))
+            # Contact-plane candidates must include the configured lateral
+            # gap.  Without this offset an adjacent candidate is generated at
+            # x=old.x+old.length and then rejected by the same 5mm collision
+            # rule that the search is supposed to satisfy.
+            # Keep the existing box's start planes as well.  This is needed
+            # for a new box that shares the same Y scan line but is adjacent
+            # along X (or the symmetric case along Y).  Using only EMS
+            # boundaries and the far side of an occupied box loses exactly
+            # those usable positions when a larger EMS contains the line.
+            xs.update((placed.x,
+                       placed.x+placed.length+clearance,
+                       placed.x-block["length"]-clearance))
+            ys.update((placed.y,
+                       placed.y+placed.width+clearance,
+                       placed.y-block["width"]-clearance))
+            zs.update((placed.z,
+                       placed.z+placed.height,
+                       placed.z-block["height"]))
+            top = placed.z + placed.height
+            if space.z <= top <= space.z + space.height - block["height"]:
+                zs.add(top)
         xs = {x for x in xs if space.x <= x <= space.x+space.length-block["length"]}
         ys = {y for y in ys if space.y <= y <= space.y+space.width-block["width"]}
-    return sorted({(x, y, space.z) for x in xs for y in ys}, key=lambda p: (p[2], p[0], p[1]))
+        zs = {z for z in zs if space.z <= z <= space.z+space.height-block["height"]}
+    return sorted({(x, y, z) for x in xs for y in ys for z in zs}, key=lambda p: (p[2], p[0], p[1]))
 
 
 def _block_pool_for_item(block_defs, item, remaining):
@@ -284,7 +306,7 @@ def _door_accepts_block(block, item, container):
 
 
 def _moves(state, eligible_items, quantity, container, min_support_ratio, limit, realistic=False,
-           filler_only=False, all_items=None):
+           filler_only=False, all_items=None, exhaustive=False):
     occupied = _placed_rectangles(state)
     # The independent validator checks support at individual-carton level.
     # A block-level 80% test can therefore admit a top block whose cartons
@@ -306,7 +328,14 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
             for block in blocks:
                 if realistic and not _door_accepts_block(block, item, container):
                     continue
-                for x, y, z in _positions(space, block, occupied, filler_only):
+                # AUTO is the terminal quantity decision.  It needs contact
+                # planes around existing cartons even during the normal beam
+                # pass; otherwise visible side/top gaps are never candidates.
+                exhaustive_positions = exhaustive or filler_only or any(item.is_auto_fill for item in eligible_items)
+                for x, y, z in _positions(
+                    space, block, occupied, exhaustive_positions,
+                    getattr(container, "clearance_mm_int", 0),
+                ):
                     if realistic:
                         stage_bounds = _stage_x_bounds(state, item, container, all_items or eligible_items)
                         if stage_bounds is not None:
@@ -536,7 +565,8 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
 
 
 def complete_state(state, items, quantity, container, min_support_ratio=0.8,
-                   mode="THEORETICAL_MAX", max_additions=500, move_validator=None):
+                   mode="THEORETICAL_MAX", max_additions=500, move_validator=None,
+                   deadline=None):
     """Greedily fill every remaining EMS with legal small blocks until stable."""
     realistic = True
     item_by_sku = {item.sku: item for item in items}
@@ -548,6 +578,8 @@ def complete_state(state, items, quantity, container, min_support_ratio=0.8,
     highest_stage = max((item.effective_loading_stage for item in items), default=1)
     additions = 0
     while additions < max_additions:
+        if deadline is not None and time.perf_counter() >= deadline:
+            break
         eligible_items = [
             item for item in items
             if completed.counts.get(item.sku, 0) < min(quantity.get(item.sku, legal_max_quantity(item, container)),
@@ -558,7 +590,7 @@ def complete_state(state, items, quantity, container, min_support_ratio=0.8,
             break
         moves = _moves(completed, eligible_items, quantity, container, min_support_ratio,
                        limit=max(4096, len(eligible_items)*1024), realistic=realistic, filler_only=True,
-                       all_items=items)
+                       all_items=items, exhaustive=True)
         legal_moves = []
         for move in moves:
             block = move[0]
