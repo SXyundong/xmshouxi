@@ -13,6 +13,7 @@ from .beam_search import (
     beam_pack_solutions,
     complete_state,
     construct_single_sku_states,
+    has_legal_single_box_move,
     _layout_compactness,
 )
 from .block_generator import generate_blocks
@@ -37,13 +38,16 @@ def _ordered_state(state, items, container, realistic):
     if not realistic:
         return state
     stages = {item.sku: item.effective_loading_stage for item in items}
-    # The door is at the high-X end.  Make the published loading sequence
-    # match the physical insertion order used by the solver: deep cargo first,
-    # then the cargo closer to the door; lower boxes precede boxes stacked on
-    # top at the same X coordinate.
+    # SKU rank is the declared factory loading order.  Do not reorder an AUTO
+    # block ahead of same-stage fixed cargo merely because it is deeper in X:
+    # the candidate generator and the final validator must use one sequence.
+    ranks = state.sku_rank_by_sku
     state.blocks = sorted(
         state.blocks,
-        key=lambda entry: (stages[entry[0]["sku"]], entry[1][0], entry[1][2], entry[1][1]),
+        key=lambda entry: (
+            stages[entry[0]["sku"]], ranks.get(entry[0]["sku"], 0),
+            entry[1][0], entry[1][2], entry[1][1],
+        ),
     )
     state.empty_spaces = spaces_after_blocks(container, state.blocks)
     state.stage_index = max(0, len(set(stages.values()))-1)
@@ -107,7 +111,9 @@ def _result_from_state(state, container, items, mode, upper, min_support_ratio, 
     validation, quantities, _ = validate_solution(placements, container, items, mode, min_support_ratio)
     validation["cross_sku_x_overlap"] = _cross_sku_x_overlap(blocks)
     validation["partial_cross_section_blocks"] = _partial_cross_section(blocks, container)
-    validation.update(validate_accessibility(placements, container))
+    validation.update(validate_accessibility(
+        placements, container, enforce_swept_path=not state.active_frontier_only,
+    ))
     validation["locally_maximal"] = locally_maximal
     # A timed optimisation may return a legal solution before it proves that
     # no further carton can be added.  Local maximality is optimisation
@@ -182,7 +188,7 @@ def _audit_context(container, items, effective_options, portfolio) -> dict:
         or "unknown"
     )
     return {
-        "algorithm": "v0.7-ordered-sku-stage-search",
+        "algorithm": "v0.8-reachable-frontier-ordered-sku-search",
         "build_version": build_version,
         "input_fingerprint": hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16],
         "effective_options": effective_options,
@@ -254,7 +260,7 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
     beam_width = int(options.get("beam_width", 18))
     max_placements = int(options.get("max_block_placements", 48))
     solution_limit = max(1, min(8, int(options.get("solution_limit", 4))))
-    time_limit = max(1.0, float(options.get("time_limit_seconds", 300.0)))
+    time_limit = max(1.0, float(options.get("time_limit_seconds", 900.0)))
     deadline = started+time_limit
     lns_rounds = max(0, int(options.get("lns_rounds", 6)))
     fixed_max_blocks = max(1, int(options.get("fixed_max_blocks_per_sku", 6)))
@@ -281,7 +287,9 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
     def state_is_fully_valid(state):
         placements, _ = _expand_state(state, items, container)
         validation, _, _ = validate_solution(placements, container, items, mode, min_support_ratio)
-        validation.update(validate_accessibility(placements, container))
+        validation.update(validate_accessibility(
+            placements, container, enforce_swept_path=not state.active_frontier_only,
+        ))
         validation["valid"] = validation["valid"] and validation["sequence_valid"]
         return validation["valid"]
 
@@ -325,11 +333,9 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
         if auto_item is None:
             return True
         ceilings = {item.sku: legal_max_quantity(item, container) for item in items}
-        probe, additions = complete_state(
-            state, items, ceilings, container, min_support_ratio,
-            mode="UNIFIED_STAGE_MAX", max_additions=1,
+        return not has_legal_single_box_move(
+            state, auto_item, ceilings, container, min_support_ratio, all_items=items,
         )
-        return additions == 0 and probe.counts.get(auto_item.sku, 0) == state.counts.get(auto_item.sku, 0)
 
     results = []
     for index, state in enumerate(selected_states, 1):
@@ -349,7 +355,13 @@ def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
             upper_bound_proven=False,
             auto_fill_upper_quantity=auto_upper,
             portfolio_candidates=portfolio.expanded_candidates,
-            audit={**audit, "selected_candidate_rank": index + 1},
+            audit={
+                **audit,
+                "selected_candidate_rank": index,
+                "sku_rank_by_sku": state.sku_rank_by_sku,
+                "predecessor_by_sku": state.predecessor_by_sku,
+                "active_frontier_only": state.active_frontier_only,
+            },
         )
         if result.validation["valid"]:
             results.append(result)

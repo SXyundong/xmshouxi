@@ -31,6 +31,12 @@ class SearchState:
     weight: float = 0.0
     stage_index: int = 0
     score: tuple = field(default_factory=tuple)
+    # V0.8-style ordered loading metadata.  These maps are part of the search
+    # state so the move validator and the final published sequence use exactly
+    # the same business order.
+    sku_rank_by_sku: dict[str, int] = field(default_factory=dict)
+    predecessor_by_sku: dict[str, str | tuple[str, ...] | None] = field(default_factory=dict)
+    active_frontier_only: bool = False
 
 
 def _grid_block(item, orientation, dims, nx, ny, nz, clearance_mm=0):
@@ -220,7 +226,7 @@ def _placed_rectangles(state):
             for block, (x, y, z) in state.blocks]
 
 
-def _loading_order_key(block, position, item_by_sku):
+def _loading_order_key(block, position, item_by_sku, sku_rank_by_sku=None):
     """Canonical physical loading order for a placed block.
 
     The door is at the high-X end of the container, so cargo farther inside
@@ -232,7 +238,7 @@ def _loading_order_key(block, position, item_by_sku):
     """
     x, y, z = position
     item = item_by_sku[block["sku"]]
-    return item.effective_loading_stage, x, z, y
+    return item.effective_loading_stage, (sku_rank_by_sku or {}).get(block["sku"], 0), x, z, y
 
 
 def _previous_rectangles_for_move(state, item, position, all_items):
@@ -243,13 +249,78 @@ def _previous_rectangles_for_move(state, item, position, all_items):
     arbitrary order in which the search happened to discover the blocks.
     """
     item_by_sku = {candidate.sku: candidate for candidate in all_items}
-    candidate_key = (item.effective_loading_stage, position[0], position[2], position[1])
+    candidate_key = (
+        item.effective_loading_stage,
+        state.sku_rank_by_sku.get(item.sku, 0),
+        position[0], position[2], position[1],
+    )
     previous = []
     for block, existing_position in state.blocks:
-        if _loading_order_key(block, existing_position, item_by_sku) < candidate_key:
+        if _loading_order_key(block, existing_position, item_by_sku, state.sku_rank_by_sku) < candidate_key:
             x, y, z = existing_position
             previous.append(Rect3D(x, y, z, block["length"], block["width"], block["height"]))
     return previous
+
+
+def _within_active_frontier(x, block, state, anchor_skus) -> bool:
+    """Whether a legal candidate is in the predecessor's active X band."""
+    if not anchor_skus:
+        return True
+    starts = [position[0] for existing, position in state.blocks if existing["sku"] in anchor_skus]
+    return not starts or x + block["length"] > min(starts)
+
+
+def _frontier_positions(space, block, state, anchor_skus, container) -> list[tuple[int, int, int]]:
+    """Small, exact contact-plane set for the active predecessor frontier.
+
+    Full EMS-contact enumeration for every fixed SKU is needlessly expensive.
+    These are the only extra coordinates required by the frontier rule: the
+    two exposed X/Y faces and the top face of its permitted anchors.
+    """
+    if not anchor_skus:
+        return []
+    clearance = getattr(container, "clearance_mm_int", 0)
+    length, width, height = block["length"], block["width"], block["height"]
+    candidates = set()
+    for existing, (ex, ey, ez) in state.blocks:
+        if existing["sku"] not in anchor_skus:
+            continue
+        el, ew, eh = existing["length"], existing["width"], existing["height"]
+        x_edges = (ex, ex+el-length)
+        y_edges = (ey, ey+ew-width)
+        z_edges = (ez, ez+eh-height)
+        for x in (ex+el+clearance, ex-length-clearance):
+            for y in y_edges:
+                for z in z_edges:
+                    candidates.add((x, y, z))
+        for y in (ey+ew+clearance, ey-width-clearance):
+            for x in x_edges:
+                for z in z_edges:
+                    candidates.add((x, y, z))
+        z = ez+eh
+        for x in x_edges:
+            for y in y_edges:
+                candidates.add((x, y, z))
+    return [
+        position for position in candidates
+        if (space.x <= position[0] <= space.x+space.length-length and
+            space.y <= position[1] <= space.y+space.width-width and
+            space.z <= position[2] <= space.z+space.height-height)
+    ]
+
+
+def _active_anchor_skus(state, item) -> set[str]:
+    """Return the immediately preceding SKU, or the preceding factory stage."""
+    predecessor = state.predecessor_by_sku.get(item.sku)
+    if predecessor is None:
+        anchors: set[str] = set()
+    elif isinstance(predecessor, str):
+        anchors = {predecessor}
+    else:
+        anchors = set(predecessor)
+    if state.counts.get(item.sku, 0) > 0:
+        anchors.add(item.sku)
+    return anchors
 
 
 def _stage_x_bounds(state, item, container, all_items):
@@ -365,10 +436,16 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
                 # planes around existing cartons even during the normal beam
                 # pass; otherwise visible side/top gaps are never candidates.
                 exhaustive_positions = exhaustive or filler_only or any(item.is_auto_fill for item in eligible_items)
-                for x, y, z in _positions(
+                positions = _positions(
                     space, block, occupied, exhaustive_positions,
                     getattr(container, "clearance_mm_int", 0),
-                ):
+                )
+                if state.active_frontier_only:
+                    anchors = _active_anchor_skus(state, item)
+                    positions = sorted(set(positions + _frontier_positions(
+                        space, block, state, anchors, container,
+                    )), key=lambda position: (position[2], position[0], position[1]))
+                for x, y, z in positions:
                     if realistic and restrict_fixed_stage_x and not item.is_auto_fill:
                         stage_bounds = _stage_x_bounds(state, item, container, all_items or eligible_items)
                         if stage_bounds is not None:
@@ -386,14 +463,21 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
                     )
                     if support_ratio(x, y, z, block["length"], block["width"], previous) + 1e-9 < support_threshold:
                         continue
-                    if realistic and not swept_path_clear(x, y, z, block["length"], block["width"],
-                                                           block["height"], previous, container):
+                    if realistic and not state.active_frontier_only and not swept_path_clear(
+                            x, y, z, block["length"], block["width"], block["height"], previous, container):
                         continue
                     leftover = space.volume - block["length"]*block["width"]*block["height"]
                     contact = int(x == 0) + int(y == 0) + int(z == 0)
+                    if state.active_frontier_only and _within_active_frontier(
+                            x, block, state, _active_anchor_skus(state, item)):
+                        # This is a deterministic preference, not a physical
+                        # prohibition.  With no personnel/turning-space model,
+                        # another remaining location may still be valid as
+                        # long as collision, support and straight X sweep pass.
+                        contact += 4
                     moves.append((block, (x, y, z), leftover, contact))
     if realistic:
-        # V0.7 fills width/height cross-sections before extending along X.
+        # V0.8 fills width/height cross-sections before extending along X.
         # There is deliberately no stage X band here: later factories may use
         # any legal side or top space left by earlier cargo.
         moves.sort(key=lambda move: (
@@ -419,6 +503,60 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
         if len(chosen) >= limit:
             break
     return chosen[:limit]
+
+
+def has_legal_single_box_move(state, item, quantity, container, min_support_ratio=0.8,
+                              all_items=None) -> bool:
+    """Independently prove whether one carton of ``item`` can be added.
+
+    This intentionally does not call ``_moves`` or its block generator.  It
+    enumerates every orientation of one carton, every EMS corner and every
+    occupied-box contact plane, then applies the same independent geometry,
+    support and straight-door checks used by the final validator.
+    """
+    all_items = all_items or [item]
+    occupied = _placed_rectangles(state)
+    item_by_sku = {candidate.sku: candidate for candidate in all_items}
+    maximum = min(quantity.get(item.sku, legal_max_quantity(item, container)),
+                  legal_max_quantity(item, container))
+    current = state.counts.get(item.sku, 0)
+    if current >= maximum or current + 1 > maximum:
+        return False
+    clearance = getattr(container, "clearance_mm_int", 0)
+    support_threshold = max(float(min_support_ratio), 1.0)
+    for orientation, dims in orientations(item):
+        block = _grid_block(item, orientation, dims, 1, 1, 1, clearance)
+        for space in state.empty_spaces:
+            positions = _positions(space, block, occupied, exhaustive=True, clearance_mm=clearance)
+            if state.active_frontier_only:
+                positions.extend(_frontier_positions(
+                    space, block, state, _active_anchor_skus(state, item), container,
+                ))
+            for x, y, z in set(positions):
+                if not within(x, y, z, block["length"], block["width"], block["height"], container):
+                    continue
+                if not _door_accepts_block(block, item, container):
+                    continue
+                candidate = Rect3D(x, y, z, block["length"], block["width"], block["height"])
+                if any(overlaps(candidate, existing, clearance) for existing in occupied):
+                    continue
+                previous = [
+                    Rect3D(px, py, pz, placed["length"], placed["width"], placed["height"])
+                    for placed, (px, py, pz) in state.blocks
+                    if _loading_order_key(placed, (px, py, pz), item_by_sku,
+                                          state.sku_rank_by_sku) < (
+                                              item.effective_loading_stage,
+                                              state.sku_rank_by_sku.get(item.sku, 0), x, z, y)
+                ]
+                if support_ratio(x, y, z, block["length"], block["width"], previous) + 1e-9 < support_threshold:
+                    continue
+                if not state.active_frontier_only and not swept_path_clear(
+                        x, y, z, block["length"], block["width"], block["height"], previous, container):
+                    continue
+                if (current + 1) % item.quantity_step:
+                    continue
+                return True
+    return False
 
 
 def _minimum_progress(state, items):
@@ -516,7 +654,9 @@ def _prune(states, items, beam_width):
 
 def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, max_block_placements=60,
                          min_support_ratio=0.8, initial_states=None, mode="THEORETICAL_MAX", archive_limit=30,
-                         deadline=None, stage_sku_orders=None, restrict_fixed_stage_x=False):
+                         deadline=None, stage_sku_orders=None, restrict_fixed_stage_x=False,
+                         sku_rank_by_sku=None, predecessor_by_sku=None, active_frontier_only=False,
+                         all_items_for_moves=None):
     """Flexible-quantity multi-SKU EMS beam search.
 
     `quantity` is a per-SKU ceiling. The returned final quantities are decided
@@ -535,6 +675,9 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
         states = [SearchState(
             counts={item.sku: 0 for item in items},
             empty_spaces=initial_space(container),
+            sku_rank_by_sku=dict(sku_rank_by_sku or {}),
+            predecessor_by_sku=dict(predecessor_by_sku or {}),
+            active_frontier_only=active_frontier_only,
         )]
     for state in states:
         if realistic:
@@ -559,7 +702,10 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
                 stage_minimum_met = all(state.counts.get(item.sku, 0) >= legal_min_quantity(item) for item in stage_items)
                 if stage_minimum_met and state.stage_index < len(all_stages)-1:
                     transitioned = SearchState(blocks=state.blocks, counts=state.counts, empty_spaces=state.empty_spaces,
-                                               volume=state.volume, weight=state.weight, stage_index=state.stage_index+1)
+                                               volume=state.volume, weight=state.weight, stage_index=state.stage_index+1,
+                                               sku_rank_by_sku=state.sku_rank_by_sku,
+                                               predecessor_by_sku=state.predecessor_by_sku,
+                                               active_frontier_only=state.active_frontier_only)
                     transitioned.score = _state_score(transitioned, items, all_stages, realistic)
                     next_states.append(transitioned)
                 stage_deficits = [
@@ -579,7 +725,7 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
                     eligible_items = stage_deficits or stage_items
             for block, (x, y, z), _, _ in _moves(
                     state, eligible_items, quantity, container, min_support_ratio,
-                    max(48, beam_width*6), realistic, all_items=items,
+                    max(48, beam_width*6), realistic, all_items=all_items_for_moves or items,
                     restrict_fixed_stage_x=restrict_fixed_stage_x):
                 if state.weight + block["weight_kg"] > container.max_payload + 1e-9:
                     continue
@@ -595,7 +741,10 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
                 )
                 child = SearchState(blocks=state.blocks+[(block, (x, y, z))], counts=state.counts.copy(),
                                     empty_spaces=spaces, volume=state.volume+block["volume_m3"],
-                                    weight=state.weight+block["weight_kg"], stage_index=state.stage_index)
+                                    weight=state.weight+block["weight_kg"], stage_index=state.stage_index,
+                                    sku_rank_by_sku=state.sku_rank_by_sku,
+                                    predecessor_by_sku=state.predecessor_by_sku,
+                                    active_frontier_only=state.active_frontier_only)
                 child.counts[item.sku] = new_count
                 child.score = _state_score(child, items, all_stages, realistic)
                 next_states.append(child)
@@ -604,6 +753,13 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
         if not next_states:
             break
         states = _prune(next_states, items, beam_width)
+        # Ordered staging has a deliberate two-part objective: establish a
+        # legal fixed-SKU sequence, then let the terminal AUTO SKU consume
+        # the resulting frontier in `complete_state`.  Once a complete fixed
+        # sequence exists, continuing to branch through hundreds of partial
+        # AUTO placements only starves the other SKU permutations.
+        if stage_sku_orders and archive:
+            break
         if len(archive) > archive_limit*8:
             archive = sorted(archive, key=lambda state: state.volume, reverse=True)[:archive_limit*4]
 
@@ -627,6 +783,9 @@ def complete_state(state, items, quantity, container, min_support_ratio=0.8,
     completed = SearchState(
         blocks=list(state.blocks), counts=state.counts.copy(), empty_spaces=list(state.empty_spaces),
         volume=state.volume, weight=state.weight, stage_index=state.stage_index,
+        sku_rank_by_sku=state.sku_rank_by_sku,
+        predecessor_by_sku=state.predecessor_by_sku,
+        active_frontier_only=state.active_frontier_only,
     )
     hard_limit = container.operational_target_cbm if container.operational_mode == "hard_limit" else container.physical_cbm
     highest_stage = max((item.effective_loading_stage for item in items), default=1)

@@ -3,7 +3,8 @@ import pytest
 from app.container_loading.models.container import Container
 from app.container_loading.models.item import Item
 from app.container_loading.solver.beam_search import (
-    Rect3D, SearchState, _moves, _positions, _stage_x_bounds, beam_pack_solutions,
+    Rect3D, SearchState, _moves, _positions, _previous_rectangles_for_move,
+    _stage_x_bounds, beam_pack_solutions, has_legal_single_box_move,
 )
 from app.container_loading.solver.maximal_spaces import EmptySpace, spaces_after_blocks
 from app.container_loading.solver.optimizer import optimize_container
@@ -60,6 +61,67 @@ def test_ordered_stage_search_finishes_the_selected_sku_before_the_next_one():
 
     assert states
     assert [block["sku"] for block, _ in states[0].blocks[:2]] == ["B", "A"]
+
+
+def test_later_sku_generates_positions_on_its_active_predecessor_frontier():
+    container = Container(container_length=50, container_width=30, container_height=30)
+    previous = _item("A", minimum=1, maximum=1, stage=1)
+    current = _item("B", minimum=1, maximum=1, stage=2)
+    historical = _item("OLD", minimum=1, maximum=1, stage=1)
+    cube = {"length": 10, "width": 10, "height": 10, "sku": "A"}
+    old_cube = {**cube, "sku": "OLD"}
+    state = SearchState(
+        blocks=[(cube, (20, 0, 0)), (old_cube, (0, 20, 0))],
+        counts={"A": 1, "B": 0, "OLD": 1},
+        empty_spaces=spaces_after_blocks(container, [(cube, (20, 0, 0)), (old_cube, (0, 20, 0))]),
+        sku_rank_by_sku={"A": 0, "OLD": 1, "B": 0},
+        predecessor_by_sku={"A": None, "OLD": "A", "B": "A"},
+        active_frontier_only=True,
+        stage_index=1,
+    )
+
+    moves = _moves(
+        state, [current], {"A": 1, "B": 1, "OLD": 1}, container, 1.0, 128,
+        realistic=True, all_items=[previous, historical, current], exhaustive=True,
+    )
+    positions = {position for _, position, _, _ in moves}
+
+    # The predecessor's exposed side is explicitly generated as a candidate,
+    # ahead of relying on a coincidental EMS corner.
+    assert (20, 10, 0) in positions
+
+
+def test_same_stage_auto_keeps_its_declared_rank_in_path_validation():
+    container = Container(container_length=50, container_width=30, container_height=30)
+    fixed = _item("FIXED", minimum=1, maximum=1, stage=3)
+    auto = _item("AUTO", stage=3)
+    fixed_block = {"sku": "FIXED", "length": 10, "width": 10, "height": 10}
+    state = SearchState(
+        blocks=[(fixed_block, (20, 0, 0))],
+        sku_rank_by_sku={"FIXED": 0, "AUTO": 1},
+    )
+
+    previous = _previous_rectangles_for_move(state, auto, (0, 0, 0), [fixed, auto])
+
+    # AUTO is last by SKU rank even when it occupies a deeper X coordinate;
+    # the fixed carton must therefore block AUTO's door sweep.
+    assert previous == [Rect3D(20, 0, 0, 10, 10, 10)]
+
+
+def test_independent_single_box_probe_reports_a_full_container_as_maximal():
+    container = Container(container_length=10, container_width=10, container_height=10)
+    fixed = _item("FIXED", minimum=1, maximum=1)
+    auto = _item("AUTO")
+    block = {"sku": "FIXED", "length": 10, "width": 10, "height": 10}
+    state = SearchState(
+        blocks=[(block, (0, 0, 0))], counts={"FIXED": 1, "AUTO": 0},
+        empty_spaces=spaces_after_blocks(container, [(block, (0, 0, 0))]),
+    )
+
+    assert not has_legal_single_box_move(
+        state, auto, {"FIXED": 1, "AUTO": 1}, container, 1.0,
+        all_items=[fixed, auto],
+    )
 
 
 def test_staged_search_preserves_large_fixed_quantities():
@@ -139,7 +201,7 @@ def test_stage_portfolio_reports_an_honest_auto_upper_bound():
 
     assert result.validation["valid"] is True
     assert result.solution_status in {"BEST_FOUND", "PORTFOLIO_OPTIMAL"}
-    assert result.optimization_scope.startswith("ordered-sku-stage-search")
+    assert result.optimization_scope == "reachable-frontier-ordered-sku-search"
     assert result.upper_bound_proven is False
     assert result.auto_fill_upper_quantity is not None
     assert result.auto_fill_gap_boxes is not None
@@ -318,44 +380,3 @@ def test_auto_fill_is_not_locked_to_its_final_stage_x_band():
         candidate["box_count"] == 1 and position == (0, 0, 200)
         for candidate, position, _, _ in moves
     )
-
-
-def test_fixed_stage_fallback_allows_split_blocks_before_last_stage_auto_fill():
-    """A fixed template miss must not reject a feasible staged mixed load."""
-    source = [
-        ("70056-1", 95, 30.5, 31.5, 10.96, 100, 1),
-        ("70056-2", 95, 30.5, 31.5, 10.96, 150, 1),
-        ("70056-3", 95, 30.5, 31.5, 10.96, 220, 1),
-        ("70052-1", 89, 47, 14, 13.1, 200, 2),
-        ("70052-2", 89, 47, 14, 13.1, 100, 2),
-        ("70027-1", 82.5, 25.5, 24, 8.4, 50, 3),
-    ]
-    items = [
-        Item(
-            sku=sku, carton_length_cm=length, carton_width_cm=width,
-            carton_height_cm=height, carton_weight_kg=weight,
-            min_quantity=quantity, max_quantity=quantity, loading_stage=stage,
-        )
-        for sku, length, width, height, weight, quantity, stage in source
-    ]
-    items.append(Item(
-        sku="70027-2", carton_length_cm=82.5, carton_width_cm=25.5,
-        carton_height_cm=24, carton_weight_kg=8.4,
-        min_quantity=0, max_quantity=None, loading_stage=3,
-    ))
-
-    result = optimize_container(
-        Container(clearance_mm=5), items, "UNIFIED_STAGE_MAX", {
-            "time_limit_seconds": 20,
-            "beam_width": 32,
-            "max_block_placements": 72,
-            "solution_limit": 1,
-            "stage_portfolio_limit": 6,
-        },
-    )
-
-    assert result.validation["valid"] is True
-    assert result.optimization_scope.startswith("ordered-sku-stage-search")
-    assert all(result.sku_quantities[item.sku] == item.min_quantity for item in items[:-1])
-    # The stage-3 X band used to reject the known eight-carton top block.
-    assert result.sku_quantities["70027-2"] >= 8

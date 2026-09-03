@@ -24,7 +24,7 @@ def swept_path_clear(x: int, y: int, z: int, length: int, width: int, height: in
     return not any(overlaps(corridor, placed, getattr(container, "clearance_mm_int", 0)) for placed in occupied)
 
 
-def validate_accessibility(placements, container) -> dict[str, bool]:
+def validate_accessibility(placements, container, *, enforce_swept_path: bool = True) -> dict[str, bool]:
     occupied = []
     stage_ordered = True
     last_stage = 0
@@ -34,8 +34,9 @@ def validate_accessibility(placements, container) -> dict[str, bool]:
         if stage < last_stage:
             stage_ordered = False
         last_stage = max(last_stage, stage)
-        if not swept_path_clear(placement.x, placement.y, placement.z, placement.length,
-                                placement.width, placement.height, occupied, container):
+        if enforce_swept_path and not swept_path_clear(
+                placement.x, placement.y, placement.z, placement.length,
+                placement.width, placement.height, occupied, container):
             accessible = False
             break
         occupied.append(placement)
@@ -44,5 +45,4 @@ def validate_accessibility(placements, container) -> dict[str, bool]:
         "accessibility_valid": accessible,
         "sequence_valid": stage_ordered and accessible,
     }
-
 

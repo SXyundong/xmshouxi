@@ -67,7 +67,7 @@ export default function ContainerLoadingOptimizerPanel(){
   useEffect(()=>{setSolutionIndex(0);setSelected(null);setFocusSku(null);setShowContext(false)},[activeMode]);
   const valid=solution?.validation?.valid;
   return <div className="container-loading-tool"><div className="app-shell">
-    <header><div><span className="eyebrow">40HQ · MULTI-SKU 3D OPTIMIZER</span><h1>智能三维装柜优化系统</h1></div><div className="header-status"><span className="live-dot"/>V0.7 · Ordered SKU Fill</div></header>
+    <header><div><span className="eyebrow">40HQ · MULTI-SKU 3D OPTIMIZER</span><h1>智能三维装柜优化系统</h1></div><div className="header-status"><span className="live-dot"/>V0.8 · Reachable Frontier Fill</div></header>
     <div className="workspace">
       <aside className="control-panel">
         <section><div className="section-title"><span>01</span>优化模式</div>{Object.keys(modeInfo).map(mode=><button key={mode} className={`mode-card ${activeMode===mode?'active':''}`} onClick={()=>setActiveMode(mode)}><b>{modeInfo[mode].title}<em>{modeInfo[mode].tag}</em></b><small>{modeInfo[mode].desc}</small></button>)}</section>

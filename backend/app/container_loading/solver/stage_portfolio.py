@@ -54,6 +54,9 @@ def _copy_for_all_items(state: SearchState, items: list, fixed_items: list) -> S
         blocks=list(state.blocks), counts=counts, empty_spaces=list(state.empty_spaces),
         volume=state.volume, weight=state.weight,
         stage_index=all_stages.index(last_fixed),
+        sku_rank_by_sku=dict(state.sku_rank_by_sku),
+        predecessor_by_sku=dict(state.predecessor_by_sku),
+        active_frontier_only=state.active_frontier_only,
     )
 
 

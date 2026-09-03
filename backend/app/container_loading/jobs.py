@@ -20,7 +20,9 @@ SOLVER_OPTIONS = {
     "stage_portfolio_limit": 6,
     "max_block_placements": 72,
     "min_support_ratio": 0.8,
-    "time_limit_seconds": 300,
+    # The optimizer is a deterministic combinatorial search.  Give the full
+    # SKU-order portfolio enough time to finish; the job API is asynchronous.
+    "time_limit_seconds": 900,
     "lns_rounds": 12,
     "completion_candidate_limit": 24,
     "completion_max_additions": 500,
