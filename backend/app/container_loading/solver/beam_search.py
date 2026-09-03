@@ -338,7 +338,8 @@ def _door_accepts_block(block, item, container):
 
 
 def _moves(state, eligible_items, quantity, container, min_support_ratio, limit, realistic=False,
-           filler_only=False, all_items=None, exhaustive=False):
+           filler_only=False, all_items=None, exhaustive=False,
+           restrict_fixed_stage_x=False):
     occupied = _placed_rectangles(state)
     # The independent validator checks support at individual-carton level.
     # A block-level 80% test can therefore admit a top block whose cartons
@@ -368,7 +369,7 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
                     space, block, occupied, exhaustive_positions,
                     getattr(container, "clearance_mm_int", 0),
                 ):
-                    if realistic:
+                    if realistic and restrict_fixed_stage_x and not item.is_auto_fill:
                         stage_bounds = _stage_x_bounds(state, item, container, all_items or eligible_items)
                         if stage_bounds is not None:
                             stage_start, frontier = stage_bounds
@@ -392,8 +393,9 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
                     contact = int(x == 0) + int(y == 0) + int(z == 0)
                     moves.append((block, (x, y, z), leftover, contact))
     if realistic:
-        # Within one loading stage, use the width/height cross-section before
-        # extending the cargo band along the container length.
+        # V0.7 fills width/height cross-sections before extending along X.
+        # There is deliberately no stage X band here: later factories may use
+        # any legal side or top space left by earlier cargo.
         moves.sort(key=lambda move: (
             move[0]["width"] * move[0]["height"],
             move[0]["width"],
@@ -513,8 +515,8 @@ def _prune(states, items, beam_width):
 
 
 def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, max_block_placements=60,
-                        min_support_ratio=0.8, initial_states=None, mode="THEORETICAL_MAX", archive_limit=30,
-                        deadline=None):
+                         min_support_ratio=0.8, initial_states=None, mode="THEORETICAL_MAX", archive_limit=30,
+                         deadline=None, stage_sku_orders=None, restrict_fixed_stage_x=False):
     """Flexible-quantity multi-SKU EMS beam search.
 
     `quantity` is a per-SKU ceiling. The returned final quantities are decided
@@ -530,7 +532,10 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
     if initial_states:
         states = initial_states
     else:
-        states = [SearchState(counts={item.sku: 0 for item in items}, empty_spaces=initial_space(container))]
+        states = [SearchState(
+            counts={item.sku: 0 for item in items},
+            empty_spaces=initial_space(container),
+        )]
     for state in states:
         if realistic:
             state.stage_index = min(state.stage_index, len(all_stages)-1)
@@ -548,6 +553,9 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
             if realistic:
                 stage = all_stages[state.stage_index]
                 stage_items = [item for item in items if item.effective_loading_stage == stage]
+                if stage_sku_orders and stage in stage_sku_orders:
+                    by_sku = {item.sku: item for item in stage_items}
+                    stage_items = [by_sku[sku] for sku in stage_sku_orders[stage] if sku in by_sku]
                 stage_minimum_met = all(state.counts.get(item.sku, 0) >= legal_min_quantity(item) for item in stage_items)
                 if stage_minimum_met and state.stage_index < len(all_stages)-1:
                     transitioned = SearchState(blocks=state.blocks, counts=state.counts, empty_spaces=state.empty_spaces,
@@ -558,10 +566,21 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
                     item for item in stage_items
                     if state.counts.get(item.sku, 0) < legal_min_quantity(item)
                 ]
-                eligible_items = stage_deficits or stage_items
+                if stage_sku_orders:
+                    # A -> B -> C means finish A's fixed quantity before B
+                    # is even considered.  The auto SKU has min=0 and is
+                    # appended to the order, so it opens only after all fixed
+                    # products of its final stage are complete.
+                    if stage_deficits:
+                        eligible_items = [stage_deficits[0]]
+                    else:
+                        eligible_items = [item for item in stage_items if item.is_auto_fill]
+                else:
+                    eligible_items = stage_deficits or stage_items
             for block, (x, y, z), _, _ in _moves(
                     state, eligible_items, quantity, container, min_support_ratio,
-                    max(48, beam_width*6), realistic, all_items=items):
+                    max(48, beam_width*6), realistic, all_items=items,
+                    restrict_fixed_stage_x=restrict_fixed_stage_x):
                 if state.weight + block["weight_kg"] > container.max_payload + 1e-9:
                     continue
                 if state.volume + block["volume_m3"] > hard_limit + 1e-9:

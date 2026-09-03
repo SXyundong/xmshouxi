@@ -1,25 +1,20 @@
-"""v0.6 sequence-aware staged search with fixed-layout fallback.
+"""V0.7 ordered-SKU staged search.
 
-Fixed-stage layouts are generated as cross-section patterns first. Each
-pattern is then tested with a small supported top seed before the existing
-carton-level completion search fills the final auto stage. This keeps the
-operational rule simple while making the future-stage quantity part of the
-layout decision.
+Each factory stage enumerates its SKU orders.  A SKU is fully placed before
+the next SKU in that order opens; only the final AUTO SKU can continue without
+a requested quantity.  Candidate generation remains three-dimensional, but
+same-stage interleaving is intentionally not an optimisation variable.
 """
 
 from __future__ import annotations
 
+from itertools import product, permutations
 import time
 
 from .beam_search import SearchState, beam_pack_solutions, complete_state
 from .maximal_spaces import initial_space
 from .quantity_optimizer import legal_max_quantity
-from .stage_portfolio import (
-    PortfolioMetadata,
-    _copy_for_all_items,
-    _exact_fixed_stage_patterns,
-    _top_fill_seeds,
-)
+from .stage_portfolio import PortfolioMetadata, _copy_for_all_items, _exact_fixed_stage_patterns
 
 
 def _signature(state: SearchState) -> tuple:
@@ -29,141 +24,107 @@ def _signature(state: SearchState) -> tuple:
     )
 
 
-def _fixed_candidates(items: list, container, portfolio_limit: int) -> list[SearchState]:
-    fixed_items = [item for item in items if not item.is_auto_fill]
-    if not fixed_items:
-        return [SearchState(counts={item.sku: 0 for item in items}, empty_spaces=initial_space(container))]
-    # The exact pattern generator is still bounded for runtime, but its first
-    # candidates are cross-section layouts rather than long SKU walls. Keep
-    # several patterns so the later auto fill can choose the best future space.
-    patterns = _exact_fixed_stage_patterns(
-        fixed_items, container, limit=max(4, min(12, portfolio_limit * 2))
-    )
-    unique = {}
-    for state in patterns:
-        unique.setdefault(_signature(state), state)
-    return list(unique.values())
-
-
-def _fallback_fixed_candidates(container, fixed_items: list, *, beam_width: int,
-                               max_block_placements: int, min_support_ratio: float,
-                               portfolio_limit: int, deadline: float | None) -> list[SearchState]:
-    """Find split-block fixed layouts when exact one-block templates fail.
-
-    The compact template pass is intentionally fast, but some valid factory
-    loads need one SKU to occupy multiple blocks.  Do not mistake a template
-    miss for a physical impossibility: use the regular 3D beam to establish
-    feasible fixed-stage seeds before opening the final automatic SKU.
-    """
-    if not fixed_items:
-        return []
-    ceilings = {item.sku: legal_max_quantity(item, container) for item in fixed_items}
-    return beam_pack_solutions(
-        fixed_items, ceilings, container, [],
-        max(beam_width, 32), max_block_placements, min_support_ratio,
-        None, "UNIFIED_STAGE_MAX",
-        archive_limit=max(8, portfolio_limit * 2), deadline=deadline,
-    )
+def _stage_orders(items: list, maximum_per_stage: int = 24) -> list[dict[int, tuple[str, ...]]]:
+    """Return deterministic SKU orders, with AUTO always last in its stage."""
+    by_stage: dict[int, list] = {}
+    for item in items:
+        by_stage.setdefault(item.effective_loading_stage, []).append(item)
+    choices = []
+    for stage in sorted(by_stage):
+        fixed = sorted((item for item in by_stage[stage] if not item.is_auto_fill), key=lambda item: item.sku)
+        auto = [item for item in by_stage[stage] if item.is_auto_fill]
+        orders = list(permutations(fixed)) if len(fixed) <= 4 else [tuple(fixed)]
+        choices.append([
+            (stage, tuple(item.sku for item in order + tuple(auto)))
+            for order in orders[:maximum_per_stage]
+        ])
+    plans = []
+    for combined in product(*choices):
+        plans.append(dict(combined))
+        if len(plans) >= maximum_per_stage:
+            break
+    return plans or [{}]
 
 
 def stack_scan_search(container, items: list, *, beam_width: int, max_block_placements: int,
                       min_support_ratio: float, solution_limit: int, deadline: float | None,
                       max_blocks_per_sku: int = 140, fixed_max_blocks_per_sku: int = 6,
                       portfolio_limit: int = 6) -> tuple[list[SearchState], PortfolioMetadata]:
-    """Search width/height-first fixed patterns and look ahead into auto fill."""
-    fixed_items = [item for item in items if not item.is_auto_fill]
+    """Evaluate deterministic same-stage SKU orders and then AUTO fill."""
     auto_item = next((item for item in items if item.is_auto_fill), None)
-    fixed_states = _fixed_candidates(items, container, portfolio_limit)
-    fixed_fallback_used = False
-    if not fixed_states and fixed_items:
-        # Reserve enough of the request budget for the final auto stage, but
-        # give the generic fixed search a meaningful chance to recover a
-        # layout that has to split one or more fixed SKUs across multiple
-        # blocks.  This path applies whether or not an AUTO SKU follows.
-        fallback_deadline = None
-        if deadline is not None:
-            remaining = max(0.0, deadline-time.perf_counter())
-            fallback_budget = min(90.0, max(10.0, remaining * 0.45))
-            fallback_deadline = min(deadline, time.perf_counter() + fallback_budget)
-        fixed_states = _fallback_fixed_candidates(
-            container, fixed_items,
-            beam_width=beam_width,
-            max_block_placements=max_block_placements,
-            min_support_ratio=min_support_ratio,
-            portfolio_limit=portfolio_limit,
-            deadline=fallback_deadline,
-        )
-        fixed_fallback_used = bool(fixed_states)
-    if auto_item is None:
-        return fixed_states[:max(1, solution_limit * 6)], PortfolioMetadata(
-            len(fixed_states), len(fixed_states), False,
-            "stack-scan-fixed-fallback" if fixed_fallback_used else "stack-scan-lookahead",
-        )
-
-    # Top seeds are deliberately evaluated before empty seeds. They expose
-    # usable vertical space above the current factory without reserving a
-    # permanent side lane for it.
-    seeds = []
-    for fixed_state in fixed_states[:max(4, min(12, portfolio_limit * 2))]:
-        seed = _copy_for_all_items(fixed_state, items, fixed_items)
-        seeds.extend(_top_fill_seeds(seed, items, auto_item, container, limit=1))
-        seeds.append(seed)
-
-    expanded = []
     ceilings = {item.sku: legal_max_quantity(item, container) for item in items}
-    # Keep a small, explicit budget for the correctness pass below.  The beam
-    # is a discovery search; it must not consume the entire job deadline and
-    # leave no time to enumerate the final carton-level gaps.
-    search_deadline = deadline
+    plans = _stage_orders(items)
+    planned_order_count = len(plans)
+    expanded: list[SearchState] = []
+    recovery_deadline = deadline
+    ordered_deadline = deadline
     if deadline is not None:
+        # Keep a bounded recovery window.  A sequential order may be a poor
+        # fit for a particular carton geometry; returning a known-feasible
+        # layout is preferable to falsely declaring the fixed request
+        # impossible while the user adjusts the SKU order.
         remaining = max(0.0, deadline-time.perf_counter())
-        completion_reserve = min(20.0, max(0.5, remaining*0.2))
-        search_deadline = deadline-completion_reserve
-    for index, seed in enumerate(seeds):
-        if search_deadline is not None and time.perf_counter() >= search_deadline:
+        recovery_deadline = deadline
+        ordered_deadline = min(deadline, time.perf_counter()+min(60.0, max(2.0, remaining*0.3)))
+        # Short API/test budgets must first preserve fixed-quantity feasibility.
+        # The production job uses 300 seconds and evaluates the ordered plans.
+        if remaining < 45.0:
+            plans = []
+    for order in plans:
+        if ordered_deadline is not None and time.perf_counter() >= ordered_deadline:
             break
-        remaining = max(0.0, search_deadline-time.perf_counter()) if search_deadline is not None else 30.0
-        seeds_left = max(1, len(seeds)-index)
-        seed_deadline = None if search_deadline is None else min(
-            search_deadline, time.perf_counter() + max(0.75, remaining / seeds_left)
+        states = beam_pack_solutions(
+            items, ceilings, container, [], 8, min(48, max_block_placements),
+            min_support_ratio, None, "UNIFIED_STAGE_MAX",
+            archive_limit=max(8, solution_limit * 6), deadline=ordered_deadline,
+            stage_sku_orders=order,
         )
-        beam_states = beam_pack_solutions(
-            items, ceilings, container, [],
-            max(beam_width, 32), max_block_placements, min_support_ratio,
-            [seed], "UNIFIED_STAGE_MAX",
-            archive_limit=max(6, solution_limit * 4), deadline=seed_deadline,
-        )
-        expanded.extend(beam_states)
-
-    # The beam intentionally explores a bounded set of promising layouts. It
-    # is not a proof that the last AUTO SKU is saturated. Run a deterministic
-    # exhaustive-contact completion over the strongest discovered states so a
-    # legal side/top carton is not lost merely because it was not a beam move.
-    if auto_item is not None and expanded:
-        completion_candidates = sorted(
-            expanded,
-            key=lambda value: (
-                value.counts.get(auto_item.sku, 0),
-                value.volume,
-                -len(value.blocks),
-            ),
-            reverse=True,
-        )[:max(24, solution_limit * 12)]
-        for candidate in completion_candidates:
-            if deadline is not None and time.perf_counter() >= deadline:
+        for state in states:
+            if ordered_deadline is not None and time.perf_counter() >= ordered_deadline:
                 break
-            completed, _ = complete_state(
-                candidate, items, ceilings, container, min_support_ratio,
-                mode="UNIFIED_STAGE_MAX", max_additions=500,
-                deadline=deadline,
+            if auto_item is not None:
+                state, _ = complete_state(
+                    state, items, ceilings, container, min_support_ratio,
+                    mode="UNIFIED_STAGE_MAX", max_additions=500, deadline=ordered_deadline,
+                )
+            expanded.append(state)
+
+    recovery_used = not plans
+    if not expanded and (recovery_deadline is None or time.perf_counter() < recovery_deadline):
+        # V0.6's general beam remains a feasibility safety net only.  It is
+        # not scored as an ordered-SKU optimum and is surfaced in the audit.
+        recovery_used = True
+        fixed_items = [item for item in items if not item.is_auto_fill]
+        fixed_ceilings = {item.sku: legal_max_quantity(item, container) for item in fixed_items}
+        recovered = _exact_fixed_stage_patterns(
+            fixed_items, container, limit=max(4, portfolio_limit * 4),
+        )
+        if not recovered:
+            recovered = beam_pack_solutions(
+                fixed_items, fixed_ceilings, container, [], max(beam_width, 32), max_block_placements,
+                min_support_ratio, None, "UNIFIED_STAGE_MAX",
+                archive_limit=max(12, solution_limit * 8), deadline=recovery_deadline,
+                restrict_fixed_stage_x=True,
             )
-            expanded.append(completed)
+        for state in recovered:
+            if recovery_deadline is not None and time.perf_counter() >= recovery_deadline:
+                break
+            state = _copy_for_all_items(state, items, fixed_items)
+            if auto_item is not None:
+                state, _ = complete_state(
+                    state, items, ceilings, container, min_support_ratio,
+                    mode="UNIFIED_STAGE_MAX", max_additions=500, deadline=recovery_deadline,
+                )
+            expanded.append(state)
 
     unique = {}
+    def auto_count(state: SearchState) -> int:
+        return state.counts.get(auto_item.sku, 0) if auto_item is not None else 0
+
     for state in sorted(
         expanded,
         key=lambda value: (
-            value.counts.get(auto_item.sku, 0),
+            auto_count(value),
             value.volume,
             -len(value.blocks),
         ),
@@ -172,6 +133,6 @@ def stack_scan_search(container, items: list, *, beam_width: int, max_block_plac
         unique.setdefault(_signature(state), state)
     selected = list(unique.values())
     return selected[:max(1, solution_limit * 6)], PortfolioMetadata(
-        len(fixed_states), len(selected), False,
-        "stack-scan-fixed-fallback" if fixed_fallback_used else "stack-scan-lookahead",
+        planned_order_count, len(selected), False,
+        "ordered-sku-stage-search+feasibility-recovery" if recovery_used else "ordered-sku-stage-search",
     )

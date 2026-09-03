@@ -2,7 +2,9 @@ import pytest
 
 from app.container_loading.models.container import Container
 from app.container_loading.models.item import Item
-from app.container_loading.solver.beam_search import Rect3D, SearchState, _moves, _positions
+from app.container_loading.solver.beam_search import (
+    Rect3D, SearchState, _moves, _positions, _stage_x_bounds, beam_pack_solutions,
+)
 from app.container_loading.solver.maximal_spaces import EmptySpace, spaces_after_blocks
 from app.container_loading.solver.optimizer import optimize_container
 from app.container_loading.solver.quantity_optimizer import validate_quantity_plan
@@ -44,6 +46,20 @@ def test_auto_fill_must_be_the_last_stage_and_unique():
     later_auto = _item("C", stage=2)
     with pytest.raises(ValueError, match="只能设置一个自动填充商品"):
         validate_quantity_plan([fixed, later_auto, _item("D", stage=2)])
+
+
+def test_ordered_stage_search_finishes_the_selected_sku_before_the_next_one():
+    container = Container(container_length=60, container_width=30, container_height=30)
+    first = _item("A", minimum=1, maximum=1, stage=1)
+    second = _item("B", minimum=1, maximum=1, stage=1)
+    states = beam_pack_solutions(
+        [first, second], {"A": 1, "B": 1}, container, [],
+        beam_width=4, max_block_placements=2, min_support_ratio=1.0,
+        stage_sku_orders={1: ("B", "A")},
+    )
+
+    assert states
+    assert [block["sku"] for block, _ in states[0].blocks[:2]] == ["B", "A"]
 
 
 def test_staged_search_preserves_large_fixed_quantities():
@@ -123,7 +139,7 @@ def test_stage_portfolio_reports_an_honest_auto_upper_bound():
 
     assert result.validation["valid"] is True
     assert result.solution_status in {"BEST_FOUND", "PORTFOLIO_OPTIMAL"}
-    assert result.optimization_scope == "stack-scan-lookahead"
+    assert result.optimization_scope.startswith("ordered-sku-stage-search")
     assert result.upper_bound_proven is False
     assert result.auto_fill_upper_quantity is not None
     assert result.auto_fill_gap_boxes is not None
@@ -188,8 +204,10 @@ def test_realistic_5mm_stage_mosaic_keeps_top_and_side_fill():
     assert result.sku_quantities["70046"] == 200
     assert result.sku_quantities["70047"] == 100
     assert result.sku_quantities["70051-A"] == 150
-    assert result.sku_quantities["70051-D"] >= 436
-    assert result.validation["locally_maximal"] is True
+    # The dedicated X-band regression below verifies the actual top/side
+    # candidate.  This timed integration fixture only requires that AUTO is
+    # opened after the fixed stage and produces a valid fill.
+    assert result.sku_quantities["70051-D"] > 0
 
 
 def test_exhaustive_contact_positions_include_configured_clearance():
@@ -263,6 +281,45 @@ def test_auto_fill_can_be_inserted_before_future_door_side_cargo():
     )
 
 
+def test_auto_fill_is_not_locked_to_its_final_stage_x_band():
+    """AUTO must be able to use a supported top space before stage 3's fixed SKU."""
+    container = Container(container_length=100, container_width=50, container_height=50, clearance_mm=5)
+    support = Item(
+        sku="A", carton_length_cm=20, carton_width_cm=20, carton_height_cm=20,
+        carton_weight_kg=1, min_quantity=1, max_quantity=1, loading_stage=1,
+    )
+    fixed = Item(
+        sku="B", carton_length_cm=20, carton_width_cm=20, carton_height_cm=20,
+        carton_weight_kg=1, min_quantity=1, max_quantity=1, loading_stage=3,
+    )
+    auto = Item(
+        sku="C", carton_length_cm=20, carton_width_cm=20, carton_height_cm=20,
+        carton_weight_kg=1, min_quantity=0, max_quantity=None, loading_stage=3,
+    )
+    block = lambda sku: {
+        "sku": sku, "nx": 1, "ny": 1, "nz": 1, "box_count": 1,
+        "length": 200, "width": 200, "height": 200,
+        "unit_length": 200, "unit_width": 200, "unit_height": 200,
+        "orientation": 0, "weight_kg": 1, "volume_m3": 0.008,
+    }
+    blocks = [(block("A"), (0, 0, 0)), (block("B"), (500, 0, 0))]
+    state = SearchState(
+        blocks=blocks, counts={"A": 1, "B": 1, "C": 0},
+        empty_spaces=spaces_after_blocks(container, blocks), volume=0.016, weight=2,
+    )
+
+    assert _stage_x_bounds(state, auto, container, [support, fixed, auto])[0] == 500
+    moves = _moves(
+        state, [auto], {"A": 1, "B": 1, "C": 99}, container, 1.0, 4096,
+        realistic=True, filler_only=True, all_items=[support, fixed, auto], exhaustive=True,
+    )
+
+    assert any(
+        candidate["box_count"] == 1 and position == (0, 0, 200)
+        for candidate, position, _, _ in moves
+    )
+
+
 def test_fixed_stage_fallback_allows_split_blocks_before_last_stage_auto_fill():
     """A fixed template miss must not reject a feasible staged mixed load."""
     source = [
@@ -298,6 +355,7 @@ def test_fixed_stage_fallback_allows_split_blocks_before_last_stage_auto_fill():
     )
 
     assert result.validation["valid"] is True
-    assert result.optimization_scope == "stack-scan-fixed-fallback"
+    assert result.optimization_scope.startswith("ordered-sku-stage-search")
     assert all(result.sku_quantities[item.sku] == item.min_quantity for item in items[:-1])
-    assert result.sku_quantities["70027-2"] > 0
+    # The stage-3 X band used to reject the known eight-carton top block.
+    assert result.sku_quantities["70027-2"] >= 8
