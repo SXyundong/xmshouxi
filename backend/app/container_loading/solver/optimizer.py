@@ -182,7 +182,7 @@ def _audit_context(container, items, effective_options, portfolio) -> dict:
         or "unknown"
     )
     return {
-        "algorithm": "v0.5-sequence-aware-stack-scan",
+        "algorithm": "v0.6-fixed-stage-fallback",
         "build_version": build_version,
         "input_fingerprint": hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16],
         "effective_options": effective_options,

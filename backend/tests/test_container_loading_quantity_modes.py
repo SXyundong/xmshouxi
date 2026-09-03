@@ -261,3 +261,43 @@ def test_auto_fill_can_be_inserted_before_future_door_side_cargo():
         and block["box_count"] == 1
         for block, position, _, _ in moves
     )
+
+
+def test_fixed_stage_fallback_allows_split_blocks_before_last_stage_auto_fill():
+    """A fixed template miss must not reject a feasible staged mixed load."""
+    source = [
+        ("70056-1", 95, 30.5, 31.5, 10.96, 100, 1),
+        ("70056-2", 95, 30.5, 31.5, 10.96, 150, 1),
+        ("70056-3", 95, 30.5, 31.5, 10.96, 220, 1),
+        ("70052-1", 89, 47, 14, 13.1, 200, 2),
+        ("70052-2", 89, 47, 14, 13.1, 100, 2),
+        ("70027-1", 82.5, 25.5, 24, 8.4, 50, 3),
+    ]
+    items = [
+        Item(
+            sku=sku, carton_length_cm=length, carton_width_cm=width,
+            carton_height_cm=height, carton_weight_kg=weight,
+            min_quantity=quantity, max_quantity=quantity, loading_stage=stage,
+        )
+        for sku, length, width, height, weight, quantity, stage in source
+    ]
+    items.append(Item(
+        sku="70027-2", carton_length_cm=82.5, carton_width_cm=25.5,
+        carton_height_cm=24, carton_weight_kg=8.4,
+        min_quantity=0, max_quantity=None, loading_stage=3,
+    ))
+
+    result = optimize_container(
+        Container(clearance_mm=5), items, "UNIFIED_STAGE_MAX", {
+            "time_limit_seconds": 20,
+            "beam_width": 32,
+            "max_block_placements": 72,
+            "solution_limit": 1,
+            "stage_portfolio_limit": 6,
+        },
+    )
+
+    assert result.validation["valid"] is True
+    assert result.optimization_scope == "stack-scan-fixed-fallback"
+    assert all(result.sku_quantities[item.sku] == item.min_quantity for item in items[:-1])
+    assert result.sku_quantities["70027-2"] > 0

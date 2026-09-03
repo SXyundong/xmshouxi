@@ -1,4 +1,4 @@
-"""v0.5 sequence-aware stack-style staged search.
+"""v0.6 sequence-aware staged search with fixed-layout fallback.
 
 Fixed-stage layouts are generated as cross-section patterns first. Each
 pattern is then tested with a small supported top seed before the existing
@@ -45,6 +45,27 @@ def _fixed_candidates(items: list, container, portfolio_limit: int) -> list[Sear
     return list(unique.values())
 
 
+def _fallback_fixed_candidates(container, fixed_items: list, *, beam_width: int,
+                               max_block_placements: int, min_support_ratio: float,
+                               portfolio_limit: int, deadline: float | None) -> list[SearchState]:
+    """Find split-block fixed layouts when exact one-block templates fail.
+
+    The compact template pass is intentionally fast, but some valid factory
+    loads need one SKU to occupy multiple blocks.  Do not mistake a template
+    miss for a physical impossibility: use the regular 3D beam to establish
+    feasible fixed-stage seeds before opening the final automatic SKU.
+    """
+    if not fixed_items:
+        return []
+    ceilings = {item.sku: legal_max_quantity(item, container) for item in fixed_items}
+    return beam_pack_solutions(
+        fixed_items, ceilings, container, [],
+        max(beam_width, 32), max_block_placements, min_support_ratio,
+        None, "UNIFIED_STAGE_MAX",
+        archive_limit=max(8, portfolio_limit * 2), deadline=deadline,
+    )
+
+
 def stack_scan_search(container, items: list, *, beam_width: int, max_block_placements: int,
                       min_support_ratio: float, solution_limit: int, deadline: float | None,
                       max_blocks_per_sku: int = 140, fixed_max_blocks_per_sku: int = 6,
@@ -53,9 +74,30 @@ def stack_scan_search(container, items: list, *, beam_width: int, max_block_plac
     fixed_items = [item for item in items if not item.is_auto_fill]
     auto_item = next((item for item in items if item.is_auto_fill), None)
     fixed_states = _fixed_candidates(items, container, portfolio_limit)
+    fixed_fallback_used = False
+    if not fixed_states and fixed_items:
+        # Reserve enough of the request budget for the final auto stage, but
+        # give the generic fixed search a meaningful chance to recover a
+        # layout that has to split one or more fixed SKUs across multiple
+        # blocks.  This path applies whether or not an AUTO SKU follows.
+        fallback_deadline = None
+        if deadline is not None:
+            remaining = max(0.0, deadline-time.perf_counter())
+            fallback_budget = min(90.0, max(10.0, remaining * 0.45))
+            fallback_deadline = min(deadline, time.perf_counter() + fallback_budget)
+        fixed_states = _fallback_fixed_candidates(
+            container, fixed_items,
+            beam_width=beam_width,
+            max_block_placements=max_block_placements,
+            min_support_ratio=min_support_ratio,
+            portfolio_limit=portfolio_limit,
+            deadline=fallback_deadline,
+        )
+        fixed_fallback_used = bool(fixed_states)
     if auto_item is None:
         return fixed_states[:max(1, solution_limit * 6)], PortfolioMetadata(
-            len(fixed_states), len(fixed_states), False, "stack-scan-lookahead"
+            len(fixed_states), len(fixed_states), False,
+            "stack-scan-fixed-fallback" if fixed_fallback_used else "stack-scan-lookahead",
         )
 
     # Top seeds are deliberately evaluated before empty seeds. They expose
@@ -130,5 +172,6 @@ def stack_scan_search(container, items: list, *, beam_width: int, max_block_plac
         unique.setdefault(_signature(state), state)
     selected = list(unique.values())
     return selected[:max(1, solution_limit * 6)], PortfolioMetadata(
-        len(fixed_states), len(selected), False, "stack-scan-lookahead"
+        len(fixed_states), len(selected), False,
+        "stack-scan-fixed-fallback" if fixed_fallback_used else "stack-scan-lookahead",
     )
