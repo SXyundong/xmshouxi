@@ -129,7 +129,11 @@ class LingXingInventorySync:
                             "inventory_source": "fba",
                             "query_fingerprint": fingerprint,
                             "source_row_key": row_key,
-                            "available_qty": _decimal(_first(row, "available_total", "afn_fulfillable_quantity")),
+                            # `afn_fulfillable_quantity` is the FBA quantity that can be
+                            # fulfilled/sold now. `available_total` is a broader LingXing
+                            # aggregate and is only a compatibility fallback when the
+                            # fulfillable field is absent.
+                            "available_qty": _decimal(_first(row, "afn_fulfillable_quantity", "available_total")),
                             "reserved_qty": _decimal(_first(row, "afn_reserved_quantity", "reserved_customerorders")),
                             "inbound_working_qty": _decimal(row.get("afn_inbound_working_quantity")),
                             "inbound_shipped_qty": _decimal(row.get("afn_inbound_shipped_quantity")),
