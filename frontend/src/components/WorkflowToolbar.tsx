@@ -15,6 +15,7 @@ import {
   getLogisticsSalesExportStatus,
   startLogisticsSalesPreview,
 } from '@/services/api';
+import SalesInboundPlacementFeeTool from '@/components/tools/SalesInboundPlacementFeeTool';
 
 const ContainerLoadingOptimizerPanel = dynamic(
   () => import('@/components/tools/container-loading/ContainerLoadingOptimizerPanel'),
@@ -131,6 +132,7 @@ export default function WorkflowToolbar({ department, compact = false, onSelectA
   const resizing = useRef(false);
   const busy = phase !== 'idle';
   const canShowTool = department === 'logistics';
+  const canShowSalesTool = department === 'sales';
   const canShowAigcTool = department === 'ads';
   const maxPanelWidth = typeof window === 'undefined' ? MAX_PANEL_WIDTH : Math.min(MAX_PANEL_WIDTH, Math.max(420, Math.round(window.innerWidth * 0.45)));
 
@@ -179,6 +181,7 @@ export default function WorkflowToolbar({ department, compact = false, onSelectA
   }
 
   function ToolCard({ drawer = false }: { drawer?: boolean }) {
+    if (canShowSalesTool) return <SalesInboundPlacementFeeTool />;
     if (canShowAigcTool) return <div className={`rounded-2xl border ${aigcActive ? 'border-[#9cddc8] bg-[#f1fcf8]' : 'border-[#dfeee8] bg-white'} ${drawer ? 'p-4' : 'p-3'}`}>
       <button type="button" onClick={() => { onSelectAigc?.(); setMobileOpen(false); }} className="flex w-full items-center gap-3 text-left">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-[#bce9da] bg-[#e8f8f2] text-[#087b61]">✦</div>
@@ -202,7 +205,7 @@ export default function WorkflowToolbar({ department, compact = false, onSelectA
   }
 
   if (compact) {
-    if (!canShowTool && !canShowAigcTool) return null;
+    if (!canShowTool && !canShowAigcTool && !canShowSalesTool) return null;
     if (canShowAigcTool) return <div className="workflow-light relative z-30"><button type="button" onClick={() => setMobileOpen(true)} className="flex w-full items-center gap-2 rounded-xl border border-[#dfeee8] bg-white px-3 py-2 text-left"><span className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#e8f8f2] text-[#087b61]">✦</span><span className="min-w-0 flex-1"><span className="block text-[10px] font-bold text-[#202632]">AIGC 视频提示词</span><span className="mt-0.5 block truncate text-[9px] text-[#687383]">{aigcActive ? '提示词生成模式已开启' : '上传商品图并生成 Seedance 提示词'}</span></span><span className="text-[10px] text-[#087b61]">→</span></button>{mobileOpen && <><button type="button" aria-label="关闭工具栏" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm" /><div className="workflow-light fixed inset-x-3 bottom-3 top-20 z-50 overflow-y-auto rounded-2xl border border-[#e1e7ed] bg-white/95 p-3 shadow-2xl backdrop-blur-2xl"><div className="mb-3 flex items-center justify-between px-1"><div className="text-xs font-bold text-[#202632]">工具库</div><button type="button" onClick={() => setMobileOpen(false)} className="rounded-lg px-2 py-1 text-sm text-[#687383] hover:bg-[#f4f6f8]">×</button></div><ToolCard drawer />{canShowTool&&<ContainerLoadingTool />}</div></>}</div>;
     return <div className="workflow-light relative z-30"><button type="button" onClick={() => setMobileOpen(true)} className="flex w-full items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.035] px-3 py-2 text-left"><span className="flex h-6 w-6 items-center justify-center rounded-lg bg-cyan-300/[0.08] text-cyan-100">↗</span><span className="min-w-0 flex-1"><span className="block text-[10px] font-medium text-white/70">工具库</span><span className="mt-0.5 block truncate text-[9px] text-white/30">{preview ? `销量同步待确认 · ${preview.matched_rows} 行` : phase === 'previewing' || phase === 'exporting' ? `销量同步运行中 · ${job?.progress || 0}%` : result ? `销量同步已完成 · ${result.updated_rows} 行` : exportResult ? `Excel 已生成 · ${exportResult.matched_rows} 行，可下载` : '销量同步 · 点击打开工具栏'}</span></span><span className="text-[10px] text-white/30">→</span></button>{mobileOpen && <><button type="button" aria-label="关闭工具栏" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-40 bg-black/20 backdrop-blur-sm" /><div className="workflow-light fixed inset-x-3 bottom-3 top-20 z-50 overflow-y-auto rounded-2xl border border-white/[0.1] bg-white/95 p-3 shadow-2xl backdrop-blur-2xl"><div className="mb-3 flex items-center justify-between px-1"><div className="text-xs font-medium text-white/75">工具库</div><button type="button" onClick={() => setMobileOpen(false)} className="rounded-lg px-2 py-1 text-sm text-white/35 hover:bg-white/[0.06] hover:text-white/70">×</button></div><ToolCard drawer />{canShowTool&&<ContainerLoadingTool />}</div></>}</div>;
   }

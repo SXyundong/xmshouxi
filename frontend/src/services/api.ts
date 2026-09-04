@@ -136,6 +136,17 @@ export async function getCurrentUser(): Promise<CurrentUser> {
   return res.json();
 }
 
+export async function downloadInboundPlacementFeeWorkbook(file: File): Promise<Blob> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  const res = await fetch('/api/workflows/sales/inbound-placement-fee', { method: 'POST', body: form });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `入库配置费测算失败：${res.status}`);
+  }
+  return res.blob();
+}
+
 export async function listConversations(department?: string): Promise<Conversation[]> {
   const query = department ? `?department=${encodeURIComponent(department)}` : '';
   const res = await fetch(`/api/conversations${query}`, { cache: 'no-store' });

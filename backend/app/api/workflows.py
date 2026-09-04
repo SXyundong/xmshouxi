@@ -1,7 +1,7 @@
 import logging
 from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from app.core.mcp_client import McpError
@@ -19,9 +19,35 @@ from app.workflows.logistics_sales_workflow import (
 from app.workflows.cached_logistics_sales_workflow import (
     cached_logistics_sales_workflow,
 )
+from app.workflows.inbound_placement_fee import process_inbound_placement_workbook
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
+
+
+@router.post("/sales/inbound-placement-fee")
+async def calculate_inbound_placement_fee(file: UploadFile = File(...)):
+    """Append US inbound placement fee results to an uploaded .xlsx workbook."""
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=422, detail="请上传 .xlsx 格式的入库配置费表")
+    try:
+        content = await file.read()
+        output, processed, skipped = process_inbound_placement_workbook(content)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Inbound placement fee workbook processing failed")
+        raise HTTPException(status_code=500, detail="入库配置费表处理失败") from exc
+    filename = f"入库配置费测算结果_{processed}行.xlsx"
+    return Response(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "X-Processed-Rows": str(processed),
+            "X-Skipped-Rows": str(skipped),
+        },
+    )
 
 
 @router.post(
