@@ -1,6 +1,6 @@
 from datetime import date
 
-from app.workflows.lingxing_sales_sync import _as_date, _first, _query_grain, _walk_dicts
+from app.workflows.lingxing_sales_sync import _as_date, _first, _query_grain, _resolve_msku, _walk_dicts
 from app.workflows.lingxing_profit_sync import _nested_unique
 from app.tools.lingxing_tool import _extract_msku
 
@@ -20,6 +20,18 @@ def test_query_grain_uses_actual_row_identity():
     assert _query_grain({"row_type": "msku_summary"}, "X", None) == "msku_day"
     assert _query_grain({"row_type": "asin_summary"}, None, "A") == "asin_day"
     assert _query_grain({"row_type": "asin_summary"}, None, None) == "asin_day"
+
+
+def test_resolve_msku_from_nested_price_list_when_asin_summary_has_no_msku():
+    row = {
+        "row_type": "asin_summary",
+        "msku": None,
+        "price_list": [
+            {"seller_sku": "60001UK01HXD", "volume": "1"},
+            {"seller_sku": "60001DE01HXD", "volume": "0"},
+        ],
+    }
+    assert _resolve_msku(row, ["60001UK01HXD"]) == "60001UK01HXD"
 
 
 def test_profit_nested_identity_only_resolves_unique_value():

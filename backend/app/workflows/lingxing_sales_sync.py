@@ -54,6 +54,33 @@ def _first(row: dict[str, Any], *keys: str) -> Any:
     return next((row[key] for key in keys if row.get(key) not in (None, "")), None)
 
 
+def _resolve_msku(row: dict[str, Any], requested_mskus: list[str] | None = None) -> str | None:
+    """Resolve MSKU from the row or its nested listing price entries.
+
+    The product-performance endpoint can return an ``asin_summary`` row with a
+    null top-level ``msku`` even when an MSKU search was applied. In that shape,
+    ``price_list`` carries the seller SKU for each listing. Only use a requested
+    MSKU when it is explicitly present in those nested entries; never infer an
+    arbitrary MSKU from an unrelated ASIN aggregate.
+    """
+
+    direct = _text(_first(row, "msku", "seller_sku", "sellerSku", "merchant_sku"))
+    if direct:
+        return direct
+    nested = {
+        _text(item.get("seller_sku"))
+        for item in row.get("price_list", [])
+        if isinstance(item, dict) and _text(item.get("seller_sku"))
+    }
+    requested = {value for value in (requested_mskus or []) if value}
+    matches = nested & requested
+    if len(matches) == 1:
+        return next(iter(matches))
+    if len(nested) == 1:
+        return next(iter(nested))
+    return None
+
+
 def _query_grain(row: dict[str, Any], msku: str | None, asin: str | None) -> str:
     """Use the source row's actual grain; do not trust requested dimensions."""
 
@@ -147,7 +174,7 @@ class LingXingSalesSync:
 
                 for row in rows:
                     sales_date = _as_date(_first(row, "rdate", "sales_date", "date"), start_date)
-                    msku = _text(_first(row, "msku", "seller_sku", "sellerSku", "merchant_sku"))
+                    msku = _resolve_msku(row, mskus)
                     asin = _text(_first(row, "asin", "amazon_asin"))
                     sid = _positive_int(_first(row, "sid", "store_id"))
                     mid = _positive_int(_first(row, "mid", "market_id"))
