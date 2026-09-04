@@ -116,6 +116,20 @@ def summarize(session: Session, start_date: date, end_date: date, msku: str | No
         ),
         params,
     ).mappings().one()
+    all_sales_rows = session.execute(
+        text(
+            "SELECT count(*) AS rows FROM lingxing_sales_analysis "
+            "WHERE sales_date BETWEEN :start_date AND :end_date"
+        ),
+        {"start_date": start_date, "end_date": end_date},
+    ).scalar() or 0
+    sales_rows = int(sales["rows"] or 0)
+    if sales_rows:
+        sales_data_status = "synced_zero" if (sales["volume"] or 0) == 0 else "has_data"
+    elif all_sales_rows:
+        sales_data_status = "no_msku_match"
+    else:
+        sales_data_status = "not_synced"
     profit = session.execute(
         text(
             "SELECT count(*) AS rows, COALESCE(sum(gross_profit), 0) AS gross_profit, "
@@ -137,6 +151,13 @@ def summarize(session: Session, start_date: date, end_date: date, msku: str | No
         "end_date": end_date.isoformat(),
         "msku": msku,
         "sales": {key: _json_value(value) for key, value in sales.items()},
+        "sales_data_status": sales_data_status,
+        "sales_data_status_text": {
+            "has_data": "已同步，存在销量数据",
+            "synced_zero": "已同步，但销量确实为0",
+            "no_msku_match": "该日期有销量记录，但没有匹配到指定MSKU",
+            "not_synced": "该日期范围没有本地销量同步记录，不能判断为0",
+        }[sales_data_status],
         "profit": {key: _json_value(value) for key, value in profit.items()},
         "inventory": {key: _json_value(value) for key, value in inventory.items()},
     }

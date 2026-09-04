@@ -15,14 +15,29 @@ class LingxingSalesTool(BaseTool):
     async def execute(self, *args, **kwargs):
         message = str(args[0] if args else kwargs.get("message", ""))
         dates = re.findall(r"20\d{2}-\d{2}-\d{2}", message)
-        end_date = date.fromisoformat(dates[-1]) if dates else date.today()
-        start_date = date.fromisoformat(dates[0]) if len(dates) >= 2 else end_date - timedelta(days=30)
+        start_date, end_date = _resolve_date_range(message, dates)
         msku = _extract_msku(message, dates)
         session = SessionLocal()
         try:
             return summarize(session, start_date, end_date, msku)
         finally:
             session.close()
+
+
+def _resolve_date_range(message: str, date_tokens: list[str] | None = None) -> tuple[date, date]:
+    date_tokens = date_tokens or re.findall(r"20\d{2}-\d{2}-\d{2}", message)
+    if len(date_tokens) >= 2:
+        return date.fromisoformat(date_tokens[0]), date.fromisoformat(date_tokens[-1])
+    if len(date_tokens) == 1:
+        parsed = date.fromisoformat(date_tokens[0])
+        return parsed, parsed
+    today = date.today()
+    if re.search(r"昨天|昨日", message):
+        yesterday = today - timedelta(days=1)
+        return yesterday, yesterday
+    if re.search(r"今天|今日", message):
+        return today, today
+    return today - timedelta(days=30), today
 
 
 def _extract_msku(message: str, date_tokens: list[str] | None = None) -> str | None:
