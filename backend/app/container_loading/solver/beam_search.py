@@ -323,6 +323,34 @@ def _active_anchor_skus(state, item) -> set[str]:
     return anchors
 
 
+def _auto_frontier_allows(state, item, block, x, clearance_mm=0) -> bool:
+    """Return whether AUTO is in the immediate predecessor's X band.
+
+    AUTO is opened only after the fixed SKU immediately before it has met its
+    quantity.  Its search may use that SKU's exposed top/side gaps, but it
+    must not jump back to an older stage's head-side EMS.  The predecessor's
+    X interval must overlap or touch the candidate interval on the door side;
+    this is a business ordering rule, not a personnel-path or turning-space
+    model.
+    """
+    if not item.is_auto_fill:
+        return True
+    predecessor = state.predecessor_by_sku.get(item.sku)
+    if not isinstance(predecessor, str):
+        return True
+    clearance = max(0, round(float(clearance_mm)))
+    anchors = [
+        (existing, position) for existing, position in state.blocks
+        if existing["sku"] == predecessor
+    ]
+    if not anchors:
+        return False
+    for existing, (ex, _, _) in anchors:
+        if x <= ex + existing["length"] + clearance and x + block["length"] > ex:
+            return True
+    return False
+
+
 def _stage_x_bounds(state, item, container, all_items):
     """Return the current stage's allowed X band.
 
@@ -446,6 +474,10 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
                         space, block, state, anchors, container,
                     )), key=lambda position: (position[2], position[0], position[1]))
                 for x, y, z in positions:
+                    if not _auto_frontier_allows(
+                            state, item, block,
+                            x, getattr(container, "clearance_mm_int", 0)):
+                        continue
                     if realistic and restrict_fixed_stage_x and not item.is_auto_fill:
                         stage_bounds = _stage_x_bounds(state, item, container, all_items or eligible_items)
                         if stage_bounds is not None:
@@ -477,9 +509,9 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
                         contact += 4
                     moves.append((block, (x, y, z), leftover, contact))
     if realistic:
-        # V0.8 fills width/height cross-sections before extending along X.
-        # There is deliberately no stage X band here: later factories may use
-        # any legal side or top space left by earlier cargo.
+        # V0.8.1 fills width/height cross-sections before extending along X.
+        # AUTO is additionally fenced to its immediate predecessor's X band;
+        # this keeps it from reopening old head-side gaps.
         moves.sort(key=lambda move: (
             move[0]["width"] * move[0]["height"],
             move[0]["width"],
@@ -533,6 +565,10 @@ def has_legal_single_box_move(state, item, quantity, container, min_support_rati
                     space, block, state, _active_anchor_skus(state, item), container,
                 ))
             for x, y, z in set(positions):
+                if not _auto_frontier_allows(
+                        state, item, block,
+                        x, getattr(container, "clearance_mm_int", 0)):
+                    continue
                 if not within(x, y, z, block["length"], block["width"], block["height"], container):
                     continue
                 if not _door_accepts_block(block, item, container):

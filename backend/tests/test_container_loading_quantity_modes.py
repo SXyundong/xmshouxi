@@ -201,7 +201,7 @@ def test_stage_portfolio_reports_an_honest_auto_upper_bound():
 
     assert result.validation["valid"] is True
     assert result.solution_status in {"BEST_FOUND", "PORTFOLIO_OPTIMAL"}
-    assert result.optimization_scope == "reachable-frontier-ordered-sku-search"
+    assert result.optimization_scope == "reachable-frontier-hard-auto-floor-ordered-sku-search"
     assert result.upper_bound_proven is False
     assert result.auto_fill_upper_quantity is not None
     assert result.auto_fill_gap_boxes is not None
@@ -343,8 +343,8 @@ def test_auto_fill_can_be_inserted_before_future_door_side_cargo():
     )
 
 
-def test_auto_fill_is_not_locked_to_its_final_stage_x_band():
-    """AUTO must be able to use a supported top space before stage 3's fixed SKU."""
+def test_auto_fill_cannot_reopen_an_older_head_side_gap():
+    """AUTO starts from its immediate predecessor, not an older stage's head gap."""
     container = Container(container_length=100, container_width=50, container_height=50, clearance_mm=5)
     support = Item(
         sku="A", carton_length_cm=20, carton_width_cm=20, carton_height_cm=20,
@@ -368,6 +368,8 @@ def test_auto_fill_is_not_locked_to_its_final_stage_x_band():
     state = SearchState(
         blocks=blocks, counts={"A": 1, "B": 1, "C": 0},
         empty_spaces=spaces_after_blocks(container, blocks), volume=0.016, weight=2,
+        sku_rank_by_sku={"B": 0, "C": 1}, predecessor_by_sku={"C": "B"},
+        active_frontier_only=True,
     )
 
     assert _stage_x_bounds(state, auto, container, [support, fixed, auto])[0] == 500
@@ -376,7 +378,11 @@ def test_auto_fill_is_not_locked_to_its_final_stage_x_band():
         realistic=True, filler_only=True, all_items=[support, fixed, auto], exhaustive=True,
     )
 
-    assert any(
+    assert not any(
         candidate["box_count"] == 1 and position == (0, 0, 200)
+        for candidate, position, _, _ in moves
+    )
+    assert any(
+        candidate["box_count"] == 1 and position == (500, 0, 200)
         for candidate, position, _, _ in moves
     )

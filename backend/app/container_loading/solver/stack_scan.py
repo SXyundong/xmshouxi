@@ -1,4 +1,4 @@
-"""V0.8 reachable-frontier ordered-SKU staged search.
+"""V0.8.1 reachable-frontier ordered-SKU staged search.
 
 Each factory stage enumerates its SKU orders.  A SKU is fully placed before
 the next SKU in that order opens; only the final AUTO SKU can continue without
@@ -206,5 +206,5 @@ def stack_scan_search(container, items: list, *, beam_width: int, max_block_plac
     selected = list(unique.values())
     return selected[:max(1, solution_limit * 6)], PortfolioMetadata(
         planned_order_count, len(selected), False,
-        "reachable-frontier-ordered-sku-search",
+        "reachable-frontier-hard-auto-floor-ordered-sku-search",
     )
