@@ -182,6 +182,50 @@ def test_fixed_layout_uses_cross_section_before_long_axial_wall():
     assert a_blocks and max(block.length for block in a_blocks) <= 3000
 
 
+def test_stage_sku_generates_multi_box_block_on_previous_top_surface():
+    """A supported top pocket must be a real block candidate, not singles only."""
+    container = Container(clearance_mm=0)
+    support = Item(
+        sku="70056-2", carton_length_cm=95, carton_width_cm=30.5,
+        carton_height_cm=31.5, carton_weight_kg=1, min_quantity=150,
+        max_quantity=150, loading_stage=1,
+    )
+    current = Item(
+        sku="70056-3", carton_length_cm=95, carton_width_cm=30.5,
+        carton_height_cm=31.5, carton_weight_kg=1, min_quantity=220,
+        max_quantity=220, loading_stage=1,
+    )
+    support_block = {
+        "sku": "70056-2", "nx": 5, "ny": 5, "nz": 6, "box_count": 150,
+        "length": 4750, "width": 1525, "height": 1890,
+        "unit_length": 950, "unit_width": 305, "unit_height": 315,
+        "orientation": 0, "weight_kg": 150, "volume_m3": 0.0,
+    }
+    state = SearchState(
+        blocks=[(support_block, (0, 0, 0))],
+        counts={"70056-2": 150, "70056-3": 0},
+        empty_spaces=spaces_after_blocks(container, [(support_block, (0, 0, 0))]),
+        sku_rank_by_sku={"70056-2": 0, "70056-3": 1},
+        predecessor_by_sku={"70056-3": "70056-2"},
+        active_frontier_only=True,
+    )
+
+    moves = _moves(
+        state, [current], {"70056-2": 150, "70056-3": 220}, container,
+        1.0, 512, realistic=True, all_items=[support, current], exhaustive=True,
+    )
+
+    assert moves[0][1] == (0, 0, 1890)
+    assert moves[0][3] >= 2000  # immediate predecessor top-contact priority
+    assert any(
+        position == (0, 0, 1890)
+        and block["box_count"] >= 40
+        and block["length"] <= 4750
+        and block["width"] <= 1525
+        for block, position, _, _ in moves
+    )
+
+
 def test_stage_portfolio_reports_an_honest_auto_upper_bound():
     fixed = _item("A", minimum=8, maximum=8, stage=1)
     auto = _item("B", stage=2)
@@ -201,7 +245,7 @@ def test_stage_portfolio_reports_an_honest_auto_upper_bound():
 
     assert result.validation["valid"] is True
     assert result.solution_status in {"BEST_FOUND", "PORTFOLIO_OPTIMAL"}
-    assert result.optimization_scope == "reachable-frontier-hard-auto-floor-ordered-sku-search"
+    assert result.optimization_scope == "reachable-supported-stack-first-hard-auto-floor-ordered-sku-search"
     assert result.upper_bound_proven is False
     assert result.auto_fill_upper_quantity is not None
     assert result.auto_fill_gap_boxes is not None

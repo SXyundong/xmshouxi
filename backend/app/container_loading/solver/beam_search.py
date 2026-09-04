@@ -37,6 +37,7 @@ class SearchState:
     sku_rank_by_sku: dict[str, int] = field(default_factory=dict)
     predecessor_by_sku: dict[str, str | tuple[str, ...] | None] = field(default_factory=dict)
     active_frontier_only: bool = False
+    stack_move_count: int = 0
 
 
 def _grid_block(item, orientation, dims, nx, ny, nz, clearance_mm=0):
@@ -374,6 +375,119 @@ def _stage_x_bounds(state, item, container, all_items):
     return stage_start, frontier
 
 
+def _earlier_blocks_for_item(state, item, all_items):
+    """Return blocks that are already loadable when ``item`` is opened.
+
+    A same-stage order is a SKU order, not a single physical anchor.  The
+    current SKU may therefore use the exposed top/side surface of *any* SKU
+    that precedes it in the selected order (and its own blocks), while later
+    SKUs remain unavailable.  This is intentionally independent of X so a
+    supported pocket is not mistaken for an axial frontier.
+    """
+    item_by_sku = {candidate.sku: candidate for candidate in all_items}
+    stage = item.effective_loading_stage
+    rank = state.sku_rank_by_sku.get(item.sku, 0)
+    for block, position in state.blocks:
+        existing_item = item_by_sku.get(block["sku"])
+        if existing_item is None:
+            continue
+        existing_stage = existing_item.effective_loading_stage
+        existing_rank = state.sku_rank_by_sku.get(block["sku"], 0)
+        if block["sku"] == item.sku or existing_stage < stage or (
+            existing_stage == stage and existing_rank < rank
+        ):
+            yield block, position
+
+
+def _stack_support_spaces(state, item, container, all_items):
+    """Build narrow support/contact regions before the generic EMS scan.
+
+    ``spaces_after_blocks`` keeps a large top EMS spanning the whole cabinet.
+    Generating a block directly from that EMS creates an overlong block whose
+    footprint cannot be fully supported, so only one-box moves survive.  These
+    synthetic spaces are bounded by each earlier block's real top or Y side;
+    block generation can consequently produce a multi-carton block that is
+    fully supported (for example 5 x 5 x 2 cartons on a 70056-2 top).
+    """
+    _, container_width, container_height = container.dimensions_mm
+    seen: set[tuple[int, int, int, int, int, int]] = set()
+    spaces: list[EmptySpace] = []
+    earlier_blocks = list(_earlier_blocks_for_item(state, item, all_items))
+    item_by_sku = {candidate.sku: candidate for candidate in all_items}
+    earlier_blocks.sort(
+        key=lambda entry: (
+            item_by_sku[entry[0]["sku"]].effective_loading_stage,
+            state.sku_rank_by_sku.get(entry[0]["sku"], 0),
+            entry[1][2] + entry[0]["height"],
+        ),
+        reverse=True,
+    )
+    for existing, (ex, ey, ez) in earlier_blocks:
+        length, width, height = existing["length"], existing["width"], existing["height"]
+        top = ez + height
+        if top < container_height:
+            candidate = EmptySpace(ex, ey, top, length, width, container_height-top)
+            key = (candidate.x, candidate.y, candidate.z, candidate.length,
+                   candidate.width, candidate.height)
+            if key not in seen:
+                spaces.append(candidate)
+                seen.add(key)
+
+        # Y-side lanes are floor-supported contact regions.  Their X extent
+        # stays within the earlier block so Y is consumed before X advances.
+        if ey + width < container_width:
+            candidate = EmptySpace(ex, ey+width, 0, length,
+                                   container_width-(ey+width), container_height)
+            key = (candidate.x, candidate.y, candidate.z, candidate.length,
+                   candidate.width, candidate.height)
+            if key not in seen:
+                spaces.append(candidate)
+                seen.add(key)
+        if ey > 0:
+            candidate = EmptySpace(ex, 0, 0, length, ey, container_height)
+            key = (candidate.x, candidate.y, candidate.z, candidate.length,
+                   candidate.width, candidate.height)
+            if key not in seen:
+                spaces.append(candidate)
+                seen.add(key)
+    return spaces
+
+
+def _future_height_reserve(state, item, all_items):
+    """Minimum headroom to keep for later fixed SKUs in this stage."""
+    rank = state.sku_rank_by_sku.get(item.sku, 0)
+    later = [
+        candidate for candidate in all_items
+        if not candidate.is_auto_fill
+        and candidate.effective_loading_stage == item.effective_loading_stage
+        and state.sku_rank_by_sku.get(candidate.sku, 0) > rank
+    ]
+    if not later:
+        return 0
+    reserves = []
+    for candidate in later:
+        heights = [height for _, (_, _, height) in orientations(candidate)]
+        if heights:
+            reserves.append(min(heights))
+    return min(reserves, default=0)
+
+
+def _on_immediate_predecessor_top(state, item, position, block, all_items):
+    """Whether a candidate sits fully on the SKU immediately before it."""
+    predecessor = state.predecessor_by_sku.get(item.sku)
+    if not isinstance(predecessor, str):
+        return False
+    x, y, z = position
+    for existing, (ex, ey, ez) in state.blocks:
+        if existing["sku"] != predecessor:
+            continue
+        if (z == ez + existing["height"]
+                and ex <= x and x + block["length"] <= ex + existing["length"]
+                and ey <= y and y + block["width"] <= ey + existing["width"]):
+            return True
+    return False
+
+
 def _positions(space, block, occupied=None, exhaustive=False, clearance_mm=0):
     if block["length"] > space.length or block["width"] > space.width or block["height"] > space.height:
         return []
@@ -447,8 +561,19 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
     # floor placements remain unaffected.
     support_threshold = max(float(min_support_ratio), 1.0) if realistic else float(min_support_ratio)
     moves = []
-    for space in state.empty_spaces:
+    candidate_spaces = [(space, False, None) for space in state.empty_spaces]
+    # Stack/contact spaces are deliberately scanned in addition to EMS.  They
+    # are sorted ahead of ordinary candidates below, so a legal supported
+    # block wins even when an axial block would contain more cartons.
+    for item in eligible_items:
+        candidate_spaces.extend(
+            (space, True, item.sku)
+            for space in _stack_support_spaces(state, item, container, all_items or eligible_items)
+        )
+    for space, stack_candidate, stack_sku in candidate_spaces:
         for item in eligible_items:
+            if stack_sku is not None and stack_sku != item.sku:
+                continue
             maximum = min(quantity.get(item.sku, legal_max_quantity(item, container)), legal_max_quantity(item, container))
             remaining = maximum-state.counts.get(item.sku, 0)
             if remaining <= 0:
@@ -463,7 +588,10 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
                 # AUTO is the terminal quantity decision.  It needs contact
                 # planes around existing cartons even during the normal beam
                 # pass; otherwise visible side/top gaps are never candidates.
-                exhaustive_positions = exhaustive or filler_only or any(item.is_auto_fill for item in eligible_items)
+                exhaustive_positions = (
+                    exhaustive or filler_only or stack_candidate
+                    or any(item.is_auto_fill for item in eligible_items)
+                )
                 positions = _positions(
                     space, block, occupied, exhaustive_positions,
                     getattr(container, "clearance_mm_int", 0),
@@ -474,6 +602,12 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
                         space, block, state, anchors, container,
                     )), key=lambda position: (position[2], position[0], position[1]))
                 for x, y, z in positions:
+                    if z > 0 and (
+                        z + block["height"] + _future_height_reserve(
+                            state, item, all_items or eligible_items,
+                        ) > container.dimensions_mm[2]
+                    ):
+                        continue
                     if not _auto_frontier_allows(
                             state, item, block,
                             x, getattr(container, "clearance_mm_int", 0)):
@@ -507,23 +641,70 @@ def _moves(state, eligible_items, quantity, container, min_support_ratio, limit,
                         # another remaining location may still be valid as
                         # long as collision, support and straight X sweep pass.
                         contact += 4
-                    moves.append((block, (x, y, z), leftover, contact))
+                    # Preserve the historical four-field move tuple.  A large
+                    # contact sentinel carries the stack-first priority into
+                    # the existing sort and all downstream unpacking/tests.
+                    stack_level = 0
+                    if stack_candidate:
+                        stack_level = 1
+                        if _on_immediate_predecessor_top(
+                                state, item, (x, y, z), block,
+                                all_items or eligible_items):
+                            stack_level = 2
+                    moves.append((block, (x, y, z), leftover,
+                                   contact + (1000 * stack_level)))
     if realistic:
-        # V0.8.1 fills width/height cross-sections before extending along X.
-        # AUTO is additionally fenced to its immediate predecessor's X band;
-        # this keeps it from reopening old head-side gaps.
+        # V0.8.2 consumes real top/Y support pockets before ordinary EMS/X
+        # candidates.  Within each class retain the width/height-first policy.
         moves.sort(key=lambda move: (
+            int(move[3] >= 2000),
+            int(move[3] >= 1000),
             move[0]["width"] * move[0]["height"],
             move[0]["width"],
             -move[1][0],
             -move[1][1],
             -move[0]["length"],
             move[0]["volume_m3"],
-            move[3],
+            move[3] % 1000,
             -move[2],
         ), reverse=True)
     else:
-        moves.sort(key=lambda move: (move[0]["volume_m3"], move[3], -move[2]), reverse=True)
+        moves.sort(key=lambda move: (
+            int(move[3] >= 2000),
+            int(move[3] >= 1000),
+            move[0]["volume_m3"], move[3] % 1000, -move[2]
+        ), reverse=True)
+    # Do not let the potentially large set of top/side contact candidates
+    # crowd every ordinary EMS/X candidate out of the beam.  Stack candidates
+    # remain the preferred branch, while a deterministic half reserve
+    # keeps floor/axial layouts available for future-space comparisons.
+    stack_moves = [move for move in moves if move[3] >= 1000]
+    regular_moves = [move for move in moves if move[3] < 1000]
+    if stack_moves:
+        # Keep one top-contact seed at the head of the stack family. It makes
+        # the intended Z-first branch visible without starving floor layouts.
+        top_seed = next((move for move in stack_moves if move[1][2] > 0), None)
+        if top_seed is not None:
+            stack_moves = [top_seed] + [move for move in stack_moves if move is not top_seed]
+    if stack_moves and regular_moves and limit > 1:
+        regular_singles = [move for move in regular_moves if move[0]["box_count"] == 1]
+        # Completion is a correctness pass: retain all (bounded by the
+        # caller's limit) single-carton contact probes so a later door-side
+        # position is not lost behind a large synthetic stack-space family.
+        single_quota = len(regular_singles) if filler_only and limit >= 1024 else limit // 2
+        regular_quota = min(len(regular_moves), max(1, single_quota))
+        stack_quota = min(len(stack_moves), limit - regular_quota)
+        selected_regular = regular_singles[:regular_quota]
+        if len(selected_regular) < regular_quota:
+            selected_regular.extend(
+                move for move in regular_moves
+                if move not in selected_regular
+            )
+            selected_regular = selected_regular[:regular_quota]
+        moves = stack_moves[:stack_quota] + selected_regular
+        if len(moves) < limit:
+            moves.extend(stack_moves[stack_quota:limit-len(moves)])
+            moves.extend(regular_moves[regular_quota:limit-len(moves)])
     chosen, seen_skus = [], set()
     for move in moves:
         if move[0]["sku"] not in seen_skus:
@@ -667,7 +848,12 @@ def _prune(states, items, beam_width):
             for item in items
         )
         last_sku = state.blocks[-1][0]["sku"] if state.blocks else ""
-        group = (state.stage_index, mask, progress, last_sku)
+        # Keep both stack-first and ordinary EMS branches alive.  The former
+        # is the declared placement preference; the latter is still needed to
+        # compare residual AUTO capacity instead of converging every order to
+        # the same tall stack.
+        group = (state.stage_index, mask, progress, last_sku,
+                 int(state.stack_move_count > 0))
         if groups.get(group, 0) >= 2:
             continue
         signature = _signature(state, items)
@@ -741,7 +927,8 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
                                                volume=state.volume, weight=state.weight, stage_index=state.stage_index+1,
                                                sku_rank_by_sku=state.sku_rank_by_sku,
                                                predecessor_by_sku=state.predecessor_by_sku,
-                                               active_frontier_only=state.active_frontier_only)
+                                               active_frontier_only=state.active_frontier_only,
+                                               stack_move_count=state.stack_move_count)
                     transitioned.score = _state_score(transitioned, items, all_stages, realistic)
                     next_states.append(transitioned)
                 stage_deficits = [
@@ -759,7 +946,7 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
                         eligible_items = [item for item in stage_items if item.is_auto_fill]
                 else:
                     eligible_items = stage_deficits or stage_items
-            for block, (x, y, z), _, _ in _moves(
+            for block, (x, y, z), _, move_contact in _moves(
                     state, eligible_items, quantity, container, min_support_ratio,
                     max(48, beam_width*6), realistic, all_items=all_items_for_moves or items,
                     restrict_fixed_stage_x=restrict_fixed_stage_x):
@@ -780,7 +967,9 @@ def beam_pack_solutions(items, quantity, container, block_defs, beam_width=24, m
                                     weight=state.weight+block["weight_kg"], stage_index=state.stage_index,
                                     sku_rank_by_sku=state.sku_rank_by_sku,
                                     predecessor_by_sku=state.predecessor_by_sku,
-                                    active_frontier_only=state.active_frontier_only)
+                    active_frontier_only=state.active_frontier_only,
+                    stack_move_count=state.stack_move_count + int(move_contact >= 1000),
+                )
                 child.counts[item.sku] = new_count
                 child.score = _state_score(child, items, all_stages, realistic)
                 next_states.append(child)
@@ -822,6 +1011,7 @@ def complete_state(state, items, quantity, container, min_support_ratio=0.8,
         sku_rank_by_sku=state.sku_rank_by_sku,
         predecessor_by_sku=state.predecessor_by_sku,
         active_frontier_only=state.active_frontier_only,
+        stack_move_count=state.stack_move_count,
     )
     hard_limit = container.operational_target_cbm if container.operational_mode == "hard_limit" else container.physical_cbm
     highest_stage = max((item.effective_loading_stage for item in items), default=1)
@@ -856,12 +1046,15 @@ def complete_state(state, items, quantity, container, min_support_ratio=0.8,
             break
         # Preserve the same width/height-first policy during completion.
         legal_moves.sort(key=lambda move: (
+            int(move[3] >= 2000),
+            int(move[3] >= 1000),
             move[0]["width"] * move[0]["height"],
             move[0]["width"],
             -move[1][0],
             -move[1][1],
             -move[0]["length"],
             move[0]["volume_m3"],
+            move[3] % 1000,
             -move[2],
             move[0]["box_count"],
         ), reverse=True)

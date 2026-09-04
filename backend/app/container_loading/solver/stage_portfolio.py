@@ -57,6 +57,7 @@ def _copy_for_all_items(state: SearchState, items: list, fixed_items: list) -> S
         sku_rank_by_sku=dict(state.sku_rank_by_sku),
         predecessor_by_sku=dict(state.predecessor_by_sku),
         active_frontier_only=state.active_frontier_only,
+        stack_move_count=state.stack_move_count,
     )
 
 
@@ -124,6 +125,10 @@ def _append_exact_block(state: SearchState, item, block: dict, position: tuple[i
         volume=state.volume + block["volume_m3"],
         weight=state.weight + block["weight_kg"],
         stage_index=state.stage_index,
+        # Exact portfolio blocks are appended directly rather than generated
+        # through the beam move tuple, so they do not carry stack-contact
+        # metadata. Preserve the parent's count here.
+        stack_move_count=state.stack_move_count,
     )
 
 
@@ -298,6 +303,7 @@ def _apply_move(state: SearchState, move, container) -> SearchState:
         volume=state.volume + block["volume_m3"],
         weight=state.weight + block["weight_kg"],
         stage_index=state.stage_index,
+        stack_move_count=state.stack_move_count + int(move[3] >= 1000),
     )
 
 

@@ -15,6 +15,7 @@ def _state_from_kept(state, kept, items, container, stage_index=None):
         blocks=list(kept), counts=counts, empty_spaces=spaces_after_blocks(container, kept),
         volume=volume, weight=weight,
         stage_index=state.stage_index if stage_index is None else stage_index,
+        stack_move_count=state.stack_move_count,
     )
 
 
@@ -55,4 +56,3 @@ def destroy_states(state, items, container, mode, max_variants=8):
         if len(unique) >= max_variants:
             break
     return list(unique.values())
-

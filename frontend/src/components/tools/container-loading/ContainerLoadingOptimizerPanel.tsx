@@ -7,7 +7,7 @@ type SkuRow = {productId:string;solverSku:string;sku:string;msku:string|null;pro
 type ProductCandidate = {id:string;sku:string;msku:string|null;product_name:string|null;country:string;store:string|null;carton_length_cm:number|null;carton_width_cm:number|null;carton_height_cm:number|null;carton_weight_kg:number|null;parameters_complete:boolean};
 type LoadingJob = {status:'queued'|'running'|'complete'|'failed';job_id:string;progress:number;message:string;error:string;results:Record<string,any>|null};
 // Default regression/sample load.  Keep the last SKU as the only AUTO item so
-// the form is immediately runnable with the scenario used to validate V0.8.1.
+// the form is immediately runnable with the scenario used to validate V0.8.2.
 const initialItems: SkuRow[] = [
   {productId:'472c3337-55d5-49c4-8a7b-8f5514fe6277',solverSku:'PRODUCT::472c3337-55d5-49c4-8a7b-8f5514fe6277',sku:'70056-1',msku:'70056US07HXD',productName:'48寸圆形蹦床粉色',country:'美国',store:'HXD-ERGO',l:95,w:30.5,h:31.5,weight:10.96,min:100,max:100,step:1,stage:1,color:'hsl(83, 75%, 62%)'},
   {productId:'5ea6d7aa-aebe-4e57-ae6a-fadbc28ccb79',solverSku:'PRODUCT::5ea6d7aa-aebe-4e57-ae6a-fadbc28ccb79',sku:'70056-2',msku:'70056US06HXD',productName:'48寸圆形蹦床绿色',country:'美国',store:'HXD-ERGO',l:95,w:30.5,h:31.5,weight:10.96,min:150,max:150,step:1,stage:1,color:'hsl(166, 75%, 62%)'},
@@ -77,7 +77,7 @@ export default function ContainerLoadingOptimizerPanel(){
   useEffect(()=>{setSolutionIndex(0);setSelected(null);setFocusSku(null);setShowContext(false)},[activeMode]);
   const valid=solution?.validation?.valid;
   return <div className="container-loading-tool"><div className="app-shell">
-    <header><div><span className="eyebrow">40HQ · MULTI-SKU 3D OPTIMIZER</span><h1>智能三维装柜优化系统</h1></div><div className="header-status"><span className="live-dot"/>V0.8.1 · Hard Auto Frontier</div></header>
+    <header><div><span className="eyebrow">40HQ · MULTI-SKU 3D OPTIMIZER</span><h1>智能三维装柜优化系统</h1></div><div className="header-status"><span className="live-dot"/>V0.8.2 · Supported Stack First</div></header>
     <div className="workspace">
       <aside className="control-panel">
         <section><div className="section-title"><span>01</span>优化模式</div>{Object.keys(modeInfo).map(mode=><button key={mode} className={`mode-card ${activeMode===mode?'active':''}`} onClick={()=>setActiveMode(mode)}><b>{modeInfo[mode].title}<em>{modeInfo[mode].tag}</em></b><small>{modeInfo[mode].desc}</small></button>)}</section>
