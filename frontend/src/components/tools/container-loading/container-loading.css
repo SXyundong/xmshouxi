@@ -45,3 +45,35 @@
 .container-loading-tool .solver-progress{position:absolute;left:50%;top:18px;z-index:2;display:flex;gap:12px;transform:translateX(-50%);padding:8px 12px;border:1px solid #37699f;border-radius:7px;background:#0b192beF;color:#9fc9ff;font-size:10px;white-space:nowrap;box-shadow:0 5px 18px #0005}
 .container-loading-tool .table-subtitle{display:block;margin:3px 0 0 15px;color:#6f87a5;font-size:8px}
 .container-loading-tool .focus-context-toggle{padding:3px 6px;border:1px solid #315985;border-radius:4px;color:#8fc2ff;background:#102744;font-size:8px}
+
+/* Input panel: this is an operational form, so favour legibility over compactness. */
+.container-loading-tool .control-panel{width:390px;padding:22px}
+.container-loading-tool .section-title{font-size:14px;color:#edf5ff;margin-bottom:12px}
+.container-loading-tool .section-title span{width:28px;height:28px;font-size:12px}
+.container-loading-tool .hint{font-size:13px;line-height:1.55;color:#b4c5da}
+.container-loading-tool .input-rule-hint{padding:10px 11px;border-left:3px solid #4d9bff;border-radius:5px;background:#0d213a}
+.container-loading-tool .product-search input{padding:10px;font-size:13px;color:#f0f6ff}
+.container-loading-tool .add-sku{font-size:12px;padding:8px 10px}
+.container-loading-tool .product-candidate{padding:10px}
+.container-loading-tool .product-candidate-main b{font-size:13px}
+.container-loading-tool .product-candidate-main span,.container-loading-tool .product-candidate-main small,.container-loading-tool .product-candidate-dimensions{font-size:11px;color:#afc1d7}
+.container-loading-tool .sku-editor{gap:10px}
+.container-loading-tool .sku-edit-card{padding:12px;border-color:#294b70;background:#0b1b30}
+.container-loading-tool .sku-edit-title{gap:8px;margin-bottom:10px}
+.container-loading-tool .sku-edit-title>i{width:10px;height:10px}
+.container-loading-tool .sku-product-title b{font-size:14px;color:#f0f6ff}
+.container-loading-tool .sku-product-title small{font-size:11px;color:#aebfd4}
+.container-loading-tool .remove-sku{width:25px;height:25px;font-size:18px}
+.container-loading-tool .product-master-data{padding:9px 10px;margin-bottom:10px;font-size:11px;color:#bfd0e4}
+.container-loading-tool .product-master-data b{font-size:12px;color:#9bcbff}
+.container-loading-tool .sku-edit-fields{grid-template-columns:1fr 1fr;gap:10px}
+.container-loading-tool .sku-edit-fields label{font-size:12px;font-weight:700;color:#c4d3e5}
+.container-loading-tool .sku-edit-fields input{margin-top:6px;padding:8px 7px;border-color:#3a5e85;background:#071523;color:#f2f7ff;font-size:15px;font-weight:700}
+.container-loading-tool .sku-edit-fields.auto-fields{grid-template-columns:1fr}
+.container-loading-tool .auto-divider{display:flex;align-items:center;gap:10px;margin:7px 0 0;color:#85bbff;font-size:12px;font-weight:800;letter-spacing:.05em}
+.container-loading-tool .auto-divider::before,.container-loading-tool .auto-divider::after{content:"";height:1px;flex:1;background:#3a73ae}
+.container-loading-tool .auto-sku-card{border-color:#357bc8;background:linear-gradient(145deg,#0d2845,#0a1c31);box-shadow:inset 3px 0 #4d9bff}
+.container-loading-tool .auto-badge{margin-left:auto;padding:4px 7px;border:1px solid #4b95e8;border-radius:999px;background:#12375f;color:#b9dcff;font-size:10px;font-style:normal;font-weight:800;white-space:nowrap}
+.container-loading-tool .clearance-control{font-size:13px;font-weight:700;color:#c5d4e7}
+.container-loading-tool .clearance-control input{padding:8px;font-size:14px;color:#f2f7ff}
+.container-loading-tool .clearance-hint{font-size:12px;color:#b4c5da}
