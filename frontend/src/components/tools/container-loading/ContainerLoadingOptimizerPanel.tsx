@@ -6,7 +6,17 @@ import * as THREE from 'three';
 type SkuRow = {productId:string;solverSku:string;sku:string;msku:string|null;productName:string|null;country:string;store:string|null;l:number;w:number;h:number;weight:number;min:number;max:number|null;step:number;stage:number;color:string};
 type ProductCandidate = {id:string;sku:string;msku:string|null;product_name:string|null;country:string;store:string|null;carton_length_cm:number|null;carton_width_cm:number|null;carton_height_cm:number|null;carton_weight_kg:number|null;parameters_complete:boolean};
 type LoadingJob = {status:'queued'|'running'|'complete'|'failed';job_id:string;progress:number;message:string;error:string;results:Record<string,any>|null};
-const initialItems: SkuRow[] = [];
+// Default regression/sample load.  Keep the last SKU as the only AUTO item so
+// the form is immediately runnable with the scenario used to validate V0.8.1.
+const initialItems: SkuRow[] = [
+  {productId:'472c3337-55d5-49c4-8a7b-8f5514fe6277',solverSku:'PRODUCT::472c3337-55d5-49c4-8a7b-8f5514fe6277',sku:'70056-1',msku:'70056US07HXD',productName:'48寸圆形蹦床粉色',country:'美国',store:'HXD-ERGO',l:95,w:30.5,h:31.5,weight:10.96,min:100,max:100,step:1,stage:1,color:'hsl(83, 75%, 62%)'},
+  {productId:'5ea6d7aa-aebe-4e57-ae6a-fadbc28ccb79',solverSku:'PRODUCT::5ea6d7aa-aebe-4e57-ae6a-fadbc28ccb79',sku:'70056-2',msku:'70056US06HXD',productName:'48寸圆形蹦床绿色',country:'美国',store:'HXD-ERGO',l:95,w:30.5,h:31.5,weight:10.96,min:150,max:150,step:1,stage:1,color:'hsl(166, 75%, 62%)'},
+  {productId:'3d866b4d-5663-45e0-86f1-dc0171626bd7',solverSku:'PRODUCT::3d866b4d-5663-45e0-86f1-dc0171626bd7',sku:'70056-3',msku:'70056US02HXD',productName:'48寸圆形蹦床蓝色',country:'美国',store:'HXD-ERGO',l:95,w:30.5,h:31.5,weight:10.96,min:220,max:220,step:1,stage:1,color:'hsl(249, 75%, 62%)'},
+  {productId:'28ce1159-09d4-4735-bdb4-1b857d816e2c',solverSku:'PRODUCT::28ce1159-09d4-4735-bdb4-1b857d816e2c',sku:'70052-1',msku:'70052US0102HXD1',productName:'新款弹簧阻力登山机黑蓝',country:'美国',store:'HXD-ERGO',l:89,w:47,h:14,weight:13.1,min:200,max:200,step:1,stage:2,color:'hsl(332, 75%, 62%)'},
+  {productId:'c32762e5-9a5d-4c27-b718-4b07732a4c52',solverSku:'PRODUCT::c32762e5-9a5d-4c27-b718-4b07732a4c52',sku:'70052-2',msku:'70052US0407HXD1',productName:'新款弹簧阻力登山机白粉',country:'美国',store:'HXD-ERGO',l:89,w:47,h:14,weight:13.1,min:100,max:100,step:1,stage:2,color:'hsl(55, 75%, 62%)'},
+  {productId:'d59086de-da78-4308-87a9-0ef72f85c0d8',solverSku:'PRODUCT::d59086de-da78-4308-87a9-0ef72f85c0d8',sku:'70027-1',msku:'70027US07HXD-1',productName:'蹦床粉色',country:'美国',store:'HXD-ERGO',l:82.5,w:25.5,h:24,weight:8.4,min:50,max:50,step:1,stage:3,color:'hsl(138, 75%, 62%)'},
+  {productId:'fab79d4e-93e0-4afa-aaf5-8db1262a6533',solverSku:'PRODUCT::fab79d4e-93e0-4afa-aaf5-8db1262a6533',sku:'70027-2',msku:'70027US02HXD-1',productName:'蹦床蓝色',country:'美国',store:'HXD-ERGO',l:82.5,w:25.5,h:24,weight:8.4,min:0,max:null,step:1,stage:3,color:'hsl(221, 75%, 62%)'},
+];
 const modeInfo:any = {
   UNIFIED_STAGE_MAX:{title:'统一阶段装柜方案',tag:'STAGED LOAD',desc:'按工厂顺序装载，同一顺序商品可混装，最后阶段支持自动填充。'},
 };
@@ -31,7 +41,7 @@ export default function ContainerLoadingOptimizerPanel(){
   const [results,setResults]=useState<Record<string,any>>({}); const [solutionIndex,setSolutionIndex]=useState(0);
   const [busy,setBusy]=useState(false); const [error,setError]=useState(''); const [selected,setSelected]=useState<any>(null); const [jobProgress,setJobProgress]=useState(0); const [jobMessage,setJobMessage]=useState('');
   const [identifier,setIdentifier]=useState(''); const [candidates,setCandidates]=useState<ProductCandidate[]>([]); const [lookupBusy,setLookupBusy]=useState(false); const [lookupError,setLookupError]=useState('');
-  const [view,setView]=useState('perspective'); const [panel,setPanel]=useState('sku'); const [clearance,setClearance]=useState(0); const [focusSku,setFocusSku]=useState<string|null>(null); const [showContext,setShowContext]=useState(false);
+  const [view,setView]=useState('perspective'); const [panel,setPanel]=useState('sku'); const [clearance,setClearance]=useState(5); const [focusSku,setFocusSku]=useState<string|null>(null); const [showContext,setShowContext]=useState(false);
   const root=results[activeMode]; const solutions=root?[root,...(root.alternatives||[])]:[]; const solution=solutions[solutionIndex]||root;
   const autoItem=items.find(item=>item.max===null); const autoQuantity=autoItem&&solution?.sku_quantities?.[autoItem.solverSku];
   function edit(index:number,key:keyof SkuRow,value:string){
