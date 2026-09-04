@@ -1,6 +1,7 @@
 from datetime import date
 
 from app.workflows.lingxing_sales_sync import _as_date, _first, _query_grain, _walk_dicts
+from app.workflows.lingxing_profit_sync import _nested_unique
 
 
 def test_sales_date_parser_uses_date_prefix_and_fallback():
@@ -18,3 +19,10 @@ def test_query_grain_uses_actual_row_identity():
     assert _query_grain({"row_type": "msku_summary"}, "X", None) == "msku_day"
     assert _query_grain({"row_type": "asin_summary"}, None, "A") == "asin_day"
     assert _query_grain({"row_type": "asin_summary"}, None, None) == "asin_day"
+
+
+def test_profit_nested_identity_only_resolves_unique_value():
+    assert _nested_unique({"price_list": [{"seller_sku": "M1"}]}, "seller_sku", "price_list") == "M1"
+    assert _nested_unique(
+        {"price_list": [{"seller_sku": "M1"}, {"seller_sku": "M2"}]}, "seller_sku", "price_list"
+    ) is None
