@@ -155,20 +155,24 @@ class StreamableHttpMcpClient:
         if not catalog_version or not schema_version:
             raise McpError("领星 MCP search 返回的版本信息不完整")
 
+        # The current gateway accepts the structured ``params`` object and
+        # immutable tool version. Older deployments used a JSON-encoded
+        # ``paramsJson`` string; sending that shape now results in a generic
+        # "must not be null" validation error.
+        action_arguments: dict[str, Any] = {
+            "toolId": tool_id,
+            "catalogVersion": catalog_version,
+            "schemaVersion": schema_version,
+            "params": arguments,
+        }
+        tool_version_id = search_data.get("toolVersionId")
+        if tool_version_id is not None:
+            action_arguments["toolVersionId"] = tool_version_id
         action_payload = await self._call_mcp_tool(
             client,
             headers,
             "action",
-            {
-                "toolId": tool_id,
-                "catalogVersion": catalog_version,
-                "schemaVersion": schema_version,
-                "paramsJson": json.dumps(
-                    arguments,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ),
-            },
+            action_arguments,
             request_id=request_id + 2,
         )
         return self._parse_tool_result(action_payload)
