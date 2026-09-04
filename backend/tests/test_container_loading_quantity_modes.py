@@ -245,7 +245,7 @@ def test_stage_portfolio_reports_an_honest_auto_upper_bound():
 
     assert result.validation["valid"] is True
     assert result.solution_status in {"BEST_FOUND", "PORTFOLIO_OPTIMAL"}
-    assert result.optimization_scope == "reachable-supported-stack-first-hard-auto-floor-ordered-sku-search"
+    assert result.optimization_scope == "v0.9-deterministic-carton-replay-door-sweep-full-support"
     assert result.upper_bound_proven is False
     assert result.auto_fill_upper_quantity is not None
     assert result.auto_fill_gap_boxes is not None

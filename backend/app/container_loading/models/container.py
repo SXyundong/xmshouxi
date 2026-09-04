@@ -13,9 +13,8 @@ class Container(BaseModel):
     max_payload: float = Field(26500.0, gt=0)
     operational_target_cbm: float = Field(68.0, gt=0)
     operational_mode: Literal["target", "soft_limit", "hard_limit"] = "target"
-    # Minimum horizontal free distance between adjacent cartons.  A zero value
-    # preserves tight face-to-face packing; vertical stacking contact remains
-    # allowed so cartons can still support one another.
+    # V0.9 physical lateral (Y-axis) free distance between adjacent cartons.
+    # X face contact and vertical stacking contact remain allowed.
     clearance_mm: float = Field(0.0, ge=0, le=100)
 
     @property
@@ -29,5 +28,4 @@ class Container(BaseModel):
     @property
     def clearance_mm_int(self) -> int:
         return round(self.clearance_mm)
-
 

@@ -29,6 +29,7 @@ from .quantity_optimizer import (
     validate_quantity_plan,
 )
 from .stack_scan import stack_scan_search
+from .v09 import optimize_container_v09
 
 
 SUPPORTED_MODES = {"UNIFIED_STAGE_MAX", "THEORETICAL_MAX", "SEQUENCE_REALISTIC_MAX"}
@@ -244,6 +245,21 @@ def _select_diverse_states(states, items, container, limit):
 
 
 def optimize_container(container, items, mode="THEORETICAL_MAX", options=None):
+    """Public solver entry point.
+
+    V0.9 is intentionally isolated from the legacy V0.8 beam/EMS pipeline.
+    Keep the public function and mode aliases stable for the API while routing
+    every new calculation through the carton-level replayable simulator.
+    """
+    mode = str(mode).upper()
+    if mode in {"FACTORY_REALISTIC_MAX", "THEORETICAL_MAX", "SEQUENCE_REALISTIC_MAX"}:
+        mode = "UNIFIED_STAGE_MAX"
+    if mode not in SUPPORTED_MODES:
+        raise ValueError(f"mode must be one of {sorted(SUPPORTED_MODES)}")
+    return optimize_container_v09(container, items, mode, options)
+
+
+def _optimize_container_v08_legacy(container, items, mode="THEORETICAL_MAX", options=None):
     options = options or {}
     mode = str(mode).upper()
     if mode in {"FACTORY_REALISTIC_MAX", "THEORETICAL_MAX", "SEQUENCE_REALISTIC_MAX"}:
