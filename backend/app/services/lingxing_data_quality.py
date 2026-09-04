@@ -105,6 +105,38 @@ def build_lingxing_quality_report(session: Session) -> dict[str, Any]:
                 "max": _date_range(session, LingXingProfitFact, LingXingProfitFact.period_end)["max"],
             },
             "inventory_snapshots": _count(session, LingXingInventorySnapshot),
+            "inventory_unresolved_msku": int(
+                session.scalar(
+                    select(func.count()).select_from(LingXingInventorySnapshot).where(
+                        LingXingInventorySnapshot.msku_product_id.is_(None)
+                    )
+                )
+                or 0
+            ),
+            "inventory_unresolved_listing": int(
+                session.scalar(
+                    select(func.count()).select_from(LingXingInventorySnapshot).where(
+                        LingXingInventorySnapshot.listing_id.is_(None)
+                    )
+                )
+                or 0
+            ),
+            "inventory_unresolved_store": int(
+                session.scalar(
+                    select(func.count()).select_from(LingXingInventorySnapshot).where(
+                        LingXingInventorySnapshot.store_id.is_(None)
+                    )
+                )
+                or 0
+            ),
+            "inventory_unresolved_market": int(
+                session.scalar(
+                    select(func.count()).select_from(LingXingInventorySnapshot).where(
+                        LingXingInventorySnapshot.market_id.is_(None)
+                    )
+                )
+                or 0
+            ),
         },
         "raw_records": _count(session, LingXingRawRecord),
         "recent_batches": batches,
