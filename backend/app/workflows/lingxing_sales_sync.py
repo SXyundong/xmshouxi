@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Callable
 
 from sqlalchemy import select
@@ -52,6 +52,19 @@ def _walk_dicts(value: Any):
 
 def _first(row: dict[str, Any], *keys: str) -> Any:
     return next((row[key] for key in keys if row.get(key) not in (None, "")), None)
+
+
+def _query_grain(row: dict[str, Any], msku: str | None, asin: str | None) -> str:
+    """Use the source row's actual grain; do not trust requested dimensions."""
+
+    row_type = (_text(row.get("row_type")) or "").lower()
+    if msku or "msku" in row_type:
+        return "msku_day"
+    if asin or "asin" in row_type:
+        return "asin_day"
+    if "sku" in row_type:
+        return "sku_day"
+    return "unknown_day"
 
 
 class LingXingSalesSync:
@@ -138,6 +151,7 @@ class LingXingSalesSync:
                     asin = _text(_first(row, "asin", "amazon_asin"))
                     sid = _positive_int(_first(row, "sid", "store_id"))
                     mid = _positive_int(_first(row, "mid", "market_id"))
+                    grain = _query_grain(row, msku, asin)
                     row_key = _payload_hash(
                         {"date": sales_date.isoformat(), "msku": msku, "asin": asin, "sid": sid, "mid": mid, "row": row}
                     )
@@ -158,7 +172,7 @@ class LingXingSalesSync:
                         "msku_product_id": msku_product.id if msku_product else None,
                         "listing_id": listing.id if listing else None,
                         "currency_code": _text(row.get("currency_code")) or currency_code,
-                        "query_grain": "msku_day",
+                        "query_grain": grain,
                         "query_fingerprint": fingerprint,
                         "source_row_key": row_key,
                         "volume": _decimal(_first(row, "volume", "sales_volume", "quantity")),
