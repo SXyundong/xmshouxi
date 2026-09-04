@@ -2,6 +2,7 @@ from datetime import date
 
 from app.workflows.lingxing_sales_sync import _as_date, _first, _query_grain, _walk_dicts
 from app.workflows.lingxing_profit_sync import _nested_unique
+from app.tools.lingxing_tool import _extract_msku
 
 
 def test_sales_date_parser_uses_date_prefix_and_fallback():
@@ -26,3 +27,8 @@ def test_profit_nested_identity_only_resolves_unique_value():
     assert _nested_unique(
         {"price_list": [{"seller_sku": "M1"}, {"seller_sku": "M2"}]}, "seller_sku", "price_list"
     ) is None
+
+
+def test_agent_msku_extractor_does_not_treat_dates_as_msku():
+    assert _extract_msku("分析 2026-08-01 到 2026-08-02") is None
+    assert _extract_msku("分析 MSKU 60005US01HXD 2026-08-02") == "60005US01HXD"
